@@ -66,7 +66,7 @@ def delayed_send_barcodes(user_id, file_base_name, file_name, delay=120):
     time.sleep(delay)  # Чекаємо 2 хвилини
     sheet_name = find_sheet_name(SPREADSHEET_ID, file_base_name)
     if not sheet_name:
-        text = f"Не знайдено листа, який містить '{file_base_name}'"
+        text = f"❌ Не знайдено листа, який містить '{file_base_name}'"
     else:
         barcodes_text = get_barcodes_from_sheet(SPREADSHEET_ID, sheet_name)
         text = f"📸 Фото: {file_name}\n🔍 Штрихкоди з листа '{sheet_name}':\n{barcodes_text}"
