@@ -1,6 +1,4 @@
-import os
 import io
-import json
 import requests
 from flask import Flask, request, Response
 from viberbot import Api
@@ -8,43 +6,45 @@ from viberbot.api.bot_configuration import BotConfiguration
 from viberbot.api.messages.text_message import TextMessage
 from viberbot.api.viber_requests import ViberMessageRequest
 
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
-from google.auth.transport.requests import Request
+
+# ==== Налаштування ====
+VIBER_TOKEN = "тут_твій_токен_вибера"
+GDRIVE_FOLDER_ID = "тут_айді_папки_на_гугл_диску"
+SPREADSHEET_ID = "тут_айді_гугл_таблиці"
+GOOGLE_TOKEN_FILE = "token.json"
+GOOGLE_CREDENTIALS_FILE = "credentials.json"
+SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/spreadsheets.readonly']
 
 app = Flask(__name__)
 
-# Налаштування Viber
-VIBER_TOKEN = "4fdbb2493ae7ddc2-cd8869c327e2c592-60fd2dddaa295531"
-GDRIVE_FOLDER_ID = "1FteobWxkEUxPq1kBhUiP70a4-X0slbWe"
-SCOPES = ['https://www.googleapis.com/auth/drive.file']
-
+# ==== Ініціалізація Viber бота ====
 viber = Api(BotConfiguration(
     name='ФотоЗагрузBot',
     avatar='https://example.com/avatar.jpg',
     auth_token=VIBER_TOKEN
 ))
 
-# Авторизація Google Drive OAuth 2.0 (збережи токен після першого запуску)
-def google_drive_service():
-    creds = None
-    if os.path.exists('token.json'):
-        from google.oauth2.credentials import Credentials
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(
-                'client_secret.json', SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open('token.json', 'w') as token:
-            token.write(creds.to_json())
-    service = build('drive', 'v3', credentials=creds)
-    return service
+# ==== Ініціалізація Google API клієнтів ====
+creds = Credentials.from_authorized_user_file(GOOGLE_TOKEN_FILE, SCOPES)
+drive_service = build('drive', 'v3', credentials=creds)
+sheets_service = build('sheets', 'v4', credentials=creds)
 
-drive_service = google_drive_service()
+def get_barcodes_from_sheet(sheet_id, sheet_name):
+    try:
+        result = sheets_service.spreadsheets().values().get(
+            spreadsheetId=sheet_id,
+            range=f"{sheet_name}!A:A"
+        ).execute()
+        values = result.get('values', [])
+        barcodes = [row[0] for row in values if row]
+        if not barcodes:
+            return "Штрихкоди не знайдено."
+        return "\n".join(barcodes)
+    except Exception as e:
+        return f"Помилка при зчитуванні штрихкодів: {str(e)}"
 
 @app.route('/', methods=['POST'])
 def incoming():
@@ -55,16 +55,20 @@ def incoming():
 
         if hasattr(message, 'media') and message.media:
             image_url = message.media
-            filename = "photo.jpg"
+            # Отримаємо розширення з URL, якщо можливо
+            ext = image_url.split('.')[-1].split('?')[0]
+            if ext.lower() not in ['jpg', 'jpeg', 'png']:
+                ext = 'jpg'
+            file_name = f"photo.{ext}"
 
             # Завантаження фото
             img_data = requests.get(image_url).content
             file_stream = io.BytesIO(img_data)
 
             # Завантаження на Google Drive
-            media = MediaIoBaseUpload(file_stream, mimetype='image/jpeg')
+            media = MediaIoBaseUpload(file_stream, mimetype=f'image/{ext}')
             file_metadata = {
-                'name': filename,
+                'name': file_name,
                 'parents': [GDRIVE_FOLDER_ID]
             }
             drive_service.files().create(
@@ -73,9 +77,15 @@ def incoming():
                 fields='id'
             ).execute()
 
-            # Відповідь лайком
+            # Отримуємо назву листа = назва файлу без розширення
+            sheet_name = file_name.rsplit('.', 1)[0]
+
+            # Зчитуємо штрихкоди
+            barcodes_text = get_barcodes_from_sheet(SPREADSHEET_ID, sheet_name)
+
+            # Відправляємо відповідь
             viber.send_messages(viber_request.sender.id, [
-                TextMessage(text="👍 Фото завантажено!")
+                TextMessage(text=f"Штрихкоди з листа '{sheet_name}':\n{barcodes_text}")
             ])
 
     return Response(status=200)
@@ -85,4 +95,5 @@ def ping():
     return "OK", 200
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
+    app.run(host='0.0.0.0', port=5000)
+
