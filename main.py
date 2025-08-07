@@ -33,27 +33,26 @@ creds = Credentials.from_authorized_user_file(GOOGLE_TOKEN_FILE, SCOPES)
 drive_service = build('drive', 'v3', credentials=creds)
 sheets_service = build('sheets', 'v4', credentials=creds)
 
-def get_barcodes_from_sheet(sheet_id, sheet_name_part):
+def find_sheet_name(sheet_id, file_base_name):
+    """Шукає лист, назва якого містить file_base_name (регістр ігнорується)."""
     try:
-        # Отримуємо всі листи в таблиці
         spreadsheet = sheets_service.spreadsheets().get(spreadsheetId=sheet_id).execute()
         sheets = spreadsheet.get('sheets', [])
-        target_sheet_name = None
-        sheet_name_part_lower = sheet_name_part.lower()
-
+        file_base_name_lower = file_base_name.lower()
         for sheet in sheets:
-            title = sheet['properties']['title']
-            if sheet_name_part_lower in title.lower():
-                target_sheet_name = title
-                break
-        
-        if not target_sheet_name:
-            return f"Лист із назвою, схожою на '{sheet_name_part}', не знайдено."
+            title = sheet.get('properties', {}).get('title', '').lower()
+            if file_base_name_lower in title:
+                return sheet.get('properties', {}).get('title')
+        return None
+    except Exception as e:
+        print(f"Помилка при пошуку листа: {e}")
+        return None
 
-        # Читаємо штрихкоди з знайденого листа
+def get_barcodes_from_sheet(sheet_id, sheet_name):
+    try:
         result = sheets_service.spreadsheets().values().get(
             spreadsheetId=sheet_id,
-            range=f"{target_sheet_name}!A:A"
+            range=f"{sheet_name}!A:A"
         ).execute()
         values = result.get('values', [])
         barcodes = [row[0] for row in values if row]
@@ -63,13 +62,17 @@ def get_barcodes_from_sheet(sheet_id, sheet_name_part):
     except Exception as e:
         return f"Помилка при зчитуванні штрихкодів: {str(e)}"
 
-def delayed_send_barcodes(user_id, reply_token, sheet_name, delay=120):
+def delayed_send_barcodes(user_id, file_base_name, file_name, delay=120):
     time.sleep(delay)  # Чекаємо 2 хвилини
-    barcodes_text = get_barcodes_from_sheet(SPREADSHEET_ID, sheet_name)
+    sheet_name = find_sheet_name(SPREADSHEET_ID, file_base_name)
+    if not sheet_name:
+        text = f"Не знайдено листа, який містить '{file_base_name}'"
+    else:
+        barcodes_text = get_barcodes_from_sheet(SPREADSHEET_ID, sheet_name)
+        text = f"📸 Фото: {file_name}\n🔍 Штрихкоди з листа '{sheet_name}':\n{barcodes_text}"
     try:
         viber.send_messages(user_id, [
-            TextMessage(text=f"Штрихкоди з листа, схожого на '{sheet_name}':\n{barcodes_text}", 
-                        reply_to_message_token=reply_token)
+            TextMessage(text=text)
         ])
     except Exception as e:
         print(f"Помилка при надсиланні штрихкодів: {e}")
@@ -81,7 +84,6 @@ def incoming():
     if isinstance(viber_request, ViberMessageRequest):
         message = viber_request.message
         user_id = viber_request.sender.id
-        reply_token = viber_request.message_token  # Для відповіді на повідомлення
 
         if hasattr(message, 'media') and message.media:
             image_url = message.media
@@ -89,11 +91,14 @@ def incoming():
             if ext.lower() not in ['jpg', 'jpeg', 'png']:
                 ext = 'jpg'
             file_name = f"photo.{ext}"
+            file_base_name = file_name.rsplit('.', 1)[0]
 
             try:
+                # Завантажуємо фото
                 img_data = requests.get(image_url).content
                 file_stream = io.BytesIO(img_data)
 
+                # Завантажуємо на Google Drive
                 media = MediaIoBaseUpload(file_stream, mimetype=f'image/{ext}')
                 file_metadata = {
                     'name': file_name,
@@ -105,24 +110,21 @@ def incoming():
                     fields='id'
                 ).execute()
 
-                sheet_name = file_name.rsplit('.', 1)[0]
-
+                # Відповідаємо користувачу
                 viber.send_messages(user_id, [
-                    TextMessage(
-                        text="Фото отримано. Чекаємо штрихкоди...",
-                        reply_to_message_token=reply_token
-                    )
+                    TextMessage(text=f"📥 Фото '{file_name}' отримано. Чекаємо штрихкоди...")
                 ])
 
+                # Фоновий потік для надсилання штрихкодів
                 threading.Thread(
                     target=delayed_send_barcodes,
-                    args=(user_id, reply_token, sheet_name),
+                    args=(user_id, file_base_name, file_name),
                     daemon=True
                 ).start()
 
             except Exception as e:
                 viber.send_messages(user_id, [
-                    TextMessage(text=f"Помилка при обробці зображення: {e}")
+                    TextMessage(text=f"❌ Помилка при обробці зображення: {e}")
                 ])
 
     return Response(status=200)
