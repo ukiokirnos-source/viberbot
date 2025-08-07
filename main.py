@@ -1,5 +1,6 @@
 import io
 import requests
+import time
 from flask import Flask, request, Response
 from viberbot import Api
 from viberbot.api.bot_configuration import BotConfiguration
@@ -31,6 +32,18 @@ viber = Api(BotConfiguration(
 creds = Credentials.from_authorized_user_file(GOOGLE_TOKEN_FILE, SCOPES)
 drive_service = build('drive', 'v3', credentials=creds)
 sheets_service = build('sheets', 'v4', credentials=creds)
+
+def sheet_exists(sheet_id, sheet_name):
+    try:
+        meta = sheets_service.spreadsheets().get(spreadsheetId=sheet_id).execute()
+        sheets = meta.get('sheets', [])
+        for sheet in sheets:
+            if sheet.get('properties', {}).get('title') == sheet_name:
+                return True
+        return False
+    except Exception as e:
+        print(f"Помилка при перевірці листа: {e}")
+        return False
 
 def get_barcodes_from_sheet(sheet_id, sheet_name):
     try:
@@ -80,8 +93,18 @@ def incoming():
             # Отримуємо назву листа = назва файлу без розширення
             sheet_name = file_name.rsplit('.', 1)[0]
 
-            # Зчитуємо штрихкоди
-            barcodes_text = get_barcodes_from_sheet(SPREADSHEET_ID, sheet_name)
+            # Чекаємо появи листа (максимум 120 секунд, перевірка кожні 10 секунд)
+            waited = 0
+            while waited < 120:
+                if sheet_exists(SPREADSHEET_ID, sheet_name):
+                    break
+                time.sleep(10)
+                waited += 10
+
+            if waited >= 120:
+                barcodes_text = f"Лист '{sheet_name}' не з'явився протягом 2 хвилин."
+            else:
+                barcodes_text = get_barcodes_from_sheet(SPREADSHEET_ID, sheet_name)
 
             # Відправляємо відповідь
             viber.send_messages(viber_request.sender.id, [
@@ -96,4 +119,3 @@ def ping():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
-
