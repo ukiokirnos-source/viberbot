@@ -47,12 +47,16 @@ def get_barcodes_from_sheet(sheet_id, sheet_name):
     except Exception as e:
         return f"Помилка при зчитуванні штрихкодів: {str(e)}"
 
-def delayed_send_barcodes(user_id, sheet_name, delay=120):
+def delayed_send_barcodes(user_id, reply_token, sheet_name, delay=120):
     time.sleep(delay)  # Чекаємо 2 хвилини
     barcodes_text = get_barcodes_from_sheet(SPREADSHEET_ID, sheet_name)
-    viber.send_messages(user_id, [
-        TextMessage(text=f"Штрихкоди з листа '{sheet_name}':\n{barcodes_text}")
-    ])
+    try:
+        viber.send_messages(user_id, [
+            TextMessage(text=f"Штрихкоди з листа '{sheet_name}':\n{barcodes_text}", 
+                        reply_to_message_token=reply_token)
+        ])
+    except Exception as e:
+        print(f"Помилка при надсиланні штрихкодів: {e}")
 
 @app.route('/', methods=['POST'])
 def incoming():
@@ -60,6 +64,8 @@ def incoming():
 
     if isinstance(viber_request, ViberMessageRequest):
         message = viber_request.message
+        user_id = viber_request.sender.id
+        reply_token = viber_request.message_token  # Для відповіді на повідомлення
 
         if hasattr(message, 'media') and message.media:
             image_url = message.media
@@ -69,31 +75,44 @@ def incoming():
             file_name = f"photo.{ext}"
 
             # Завантажуємо фото
-            img_data = requests.get(image_url).content
-            file_stream = io.BytesIO(img_data)
+            try:
+                img_data = requests.get(image_url).content
+                file_stream = io.BytesIO(img_data)
 
-            # Завантажуємо на Google Drive
-            media = MediaIoBaseUpload(file_stream, mimetype=f'image/{ext}')
-            file_metadata = {
-                'name': file_name,
-                'parents': [GDRIVE_FOLDER_ID]
-            }
-            drive_service.files().create(
-                body=file_metadata,
-                media_body=media,
-                fields='id'
-            ).execute()
+                # Завантажуємо на Google Drive
+                media = MediaIoBaseUpload(file_stream, mimetype=f'image/{ext}')
+                file_metadata = {
+                    'name': file_name,
+                    'parents': [GDRIVE_FOLDER_ID]
+                }
+                drive_service.files().create(
+                    body=file_metadata,
+                    media_body=media,
+                    fields='id'
+                ).execute()
 
-            # Назва листа = назва файлу без розширення
-            sheet_name = file_name.rsplit('.', 1)[0]
+                # Назва листа = назва файлу без розширення
+                sheet_name = file_name.rsplit('.', 1)[0]
 
-            # Відповідаємо, що фото прийнято і штрихкоди надішлемо пізніше
-            viber.send_messages(viber_request.sender.id, [
-                TextMessage(text="Фото отримано. Чекайте, зараз зчитаємо штрихкоди...")
-            ])
+                # Відповідь користувачу про отримання фото
+                viber.send_messages(user_id, [
+                    TextMessage(
+                        text="Фото отримано. Чекаємо штрихкоди...",
+                        reply_to_message_token=reply_token
+                    )
+                ])
 
-            # Запускаємо фоновий потік для відправки штрихкодів через 2 хвилини
-            threading.Thread(target=delayed_send_barcodes, args=(viber_request.sender.id, sheet_name), daemon=True).start()
+                # Фоновий потік для надсилання штрихкодів
+                threading.Thread(
+                    target=delayed_send_barcodes,
+                    args=(user_id, reply_token, sheet_name),
+                    daemon=True
+                ).start()
+
+            except Exception as e:
+                viber.send_messages(user_id, [
+                    TextMessage(text=f"Помилка при обробці зображення: {e}")
+                ])
 
     return Response(status=200)
 
