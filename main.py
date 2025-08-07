@@ -1,6 +1,7 @@
 import io
-import requests
+import threading
 import time
+import requests
 from flask import Flask, request, Response
 from viberbot import Api
 from viberbot.api.bot_configuration import BotConfiguration
@@ -16,7 +17,6 @@ VIBER_TOKEN = "4fdbb2493ae7ddc2-cd8869c327e2c592-60fd2dddaa295531"
 GDRIVE_FOLDER_ID = "1FteobWxkEUxPq1kBhUiP70a4-X0slbWe"
 SPREADSHEET_ID = "1W_fiI8FiwDn0sKq0ks7rGcWhXB0HEcHxar1uK4GL1P8"
 GOOGLE_TOKEN_FILE = "token.json"
-GOOGLE_CREDENTIALS_FILE = "credentials.json"
 SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/spreadsheets.readonly']
 
 app = Flask(__name__)
@@ -33,18 +33,6 @@ creds = Credentials.from_authorized_user_file(GOOGLE_TOKEN_FILE, SCOPES)
 drive_service = build('drive', 'v3', credentials=creds)
 sheets_service = build('sheets', 'v4', credentials=creds)
 
-def sheet_exists(sheet_id, sheet_name):
-    try:
-        meta = sheets_service.spreadsheets().get(spreadsheetId=sheet_id).execute()
-        sheets = meta.get('sheets', [])
-        for sheet in sheets:
-            if sheet.get('properties', {}).get('title') == sheet_name:
-                return True
-        return False
-    except Exception as e:
-        print(f"Помилка при перевірці листа: {e}")
-        return False
-
 def get_barcodes_from_sheet(sheet_id, sheet_name):
     try:
         result = sheets_service.spreadsheets().values().get(
@@ -59,6 +47,13 @@ def get_barcodes_from_sheet(sheet_id, sheet_name):
     except Exception as e:
         return f"Помилка при зчитуванні штрихкодів: {str(e)}"
 
+def delayed_send_barcodes(user_id, sheet_name, delay=120):
+    time.sleep(delay)  # Чекаємо 2 хвилини
+    barcodes_text = get_barcodes_from_sheet(SPREADSHEET_ID, sheet_name)
+    viber.send_messages(user_id, [
+        TextMessage(text=f"Штрихкоди з листа '{sheet_name}':\n{barcodes_text}")
+    ])
+
 @app.route('/', methods=['POST'])
 def incoming():
     viber_request = viber.parse_request(request.get_data())
@@ -68,17 +63,16 @@ def incoming():
 
         if hasattr(message, 'media') and message.media:
             image_url = message.media
-            # Отримаємо розширення з URL, якщо можливо
             ext = image_url.split('.')[-1].split('?')[0]
             if ext.lower() not in ['jpg', 'jpeg', 'png']:
                 ext = 'jpg'
             file_name = f"photo.{ext}"
 
-            # Завантаження фото
+            # Завантажуємо фото
             img_data = requests.get(image_url).content
             file_stream = io.BytesIO(img_data)
 
-            # Завантаження на Google Drive
+            # Завантажуємо на Google Drive
             media = MediaIoBaseUpload(file_stream, mimetype=f'image/{ext}')
             file_metadata = {
                 'name': file_name,
@@ -90,26 +84,16 @@ def incoming():
                 fields='id'
             ).execute()
 
-            # Отримуємо назву листа = назва файлу без розширення
+            # Назва листа = назва файлу без розширення
             sheet_name = file_name.rsplit('.', 1)[0]
 
-            # Чекаємо появи листа (максимум 120 секунд, перевірка кожні 10 секунд)
-            waited = 0
-            while waited < 120:
-                if sheet_exists(SPREADSHEET_ID, sheet_name):
-                    break
-                time.sleep(10)
-                waited += 10
-
-            if waited >= 120:
-                barcodes_text = f"Лист '{sheet_name}' не з'явився протягом 2 хвилин."
-            else:
-                barcodes_text = get_barcodes_from_sheet(SPREADSHEET_ID, sheet_name)
-
-            # Відправляємо відповідь
+            # Відповідаємо, що фото прийнято і штрихкоди надішлемо пізніше
             viber.send_messages(viber_request.sender.id, [
-                TextMessage(text=f"Штрихкоди з листа '{sheet_name}':\n{barcodes_text}")
+                TextMessage(text="Фото отримано. Чекайте, зараз зчитаємо штрихкоди...")
             ])
+
+            # Запускаємо фоновий потік для відправки штрихкодів через 2 хвилини
+            threading.Thread(target=delayed_send_barcodes, args=(viber_request.sender.id, sheet_name), daemon=True).start()
 
     return Response(status=200)
 
