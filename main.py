@@ -7,10 +7,9 @@ from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
-# Для оновлення токенів потрібно цей імпорт
 from google.auth.transport.requests import Request
 
-# Disable HTTPS requirement for OAuth in development (Replit environment)
+# Для роботи OAuth в локальному середовищі, якщо потрібно:
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
 from viberbot import Api
@@ -21,11 +20,11 @@ from viberbot.api.viber_requests import ViberMessageRequest
 app = Flask(__name__)
 app.secret_key = os.environ.get("SESSION_SECRET", "change_this_secret")
 
-# Google OAuth config
+# Google OAuth конфігурація
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 CLIENT_SECRETS_FILE = "client_secret.json"
 
-# Viber config
+# Viber токен
 VIBER_AUTH_TOKEN = os.environ.get("VIBER_AUTH_TOKEN", "твій_токен_тут")
 
 viber = Api(BotConfiguration(
@@ -40,7 +39,6 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 def get_credentials():
     if os.path.exists("token.json"):
         creds = Credentials.from_authorized_user_file("token.json", SCOPES)
-        # Замість requests.Request() тут має бути google.auth.transport.requests.Request()
         if creds.expired and creds.refresh_token:
             creds.refresh(Request())
             with open("token.json", "w") as token:
@@ -55,7 +53,6 @@ def get_drive_service():
     return None
 
 def get_redirect_uri():
-    """Get the correct redirect URI from client_secret.json"""
     try:
         with open(CLIENT_SECRETS_FILE, 'r') as f:
             client_config = json.load(f)
@@ -82,11 +79,8 @@ def home():
     if creds:
         return '✅ Google Drive Authorized | Viber bot is running'
     else:
-        # Застосовуємо https для посилання авторизації
-        if request.host and 'replit.dev' in request.host:
-            auth_url = url_for("authorize", _external=True, _scheme='https')
-        else:
-            auth_url = url_for("authorize", _external=True)
+        # Для Render гарантовано https
+        auth_url = url_for("authorize", _external=True, _scheme='https')
         return f'<a href="{auth_url}">Authorize Google Drive</a>'
 
 @app.route("/authorize")
@@ -150,7 +144,7 @@ def viber_webhook():
                 filename = f"photo_{viber_request.timestamp}.jpg"
                 filepath = os.path.join(UPLOAD_FOLDER, filename)
 
-                # Save image locally
+                # Збереження локально
                 try:
                     r = requests.get(image_url)
                     r.raise_for_status()
@@ -160,7 +154,7 @@ def viber_webhook():
                     print(f"Error downloading image: {e}")
                     return "Error", 500
 
-                # Upload to Google Drive
+                # Завантаження в Google Drive
                 drive_service = get_drive_service()
                 if drive_service:
                     try:
@@ -175,7 +169,6 @@ def viber_webhook():
                         file_id = uploaded_file.get('id') if uploaded_file else 'unknown'
                         print(f"Uploaded file ID: {file_id}")
 
-                        # Reply to user
                         viber.send_messages(viber_request.sender.id, [
                             PictureMessage(text="Фото збережено в Google Drive", media=image_url)
                         ])
@@ -197,7 +190,6 @@ def viber_webhook():
 @app.route('/set_webhook')
 def set_webhook():
     try:
-        # ЯВНО ВКАЗУЄМО HTTPS в url_for (обов'язково!)
         webhook_url = url_for('viber_webhook', _external=True, _scheme='https')
         result = viber.set_webhook(webhook_url)
         return f"Webhook set: {result}"
