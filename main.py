@@ -90,8 +90,11 @@ def incoming():
             ext = image_url.split('.')[-1].split('?')[0]
             if ext.lower() not in ['jpg', 'jpeg', 'png']:
                 ext = 'jpg'
-            file_name = f"photo.{ext}"
-            file_base_name = file_name.rsplit('.', 1)[0]
+            import datetime
+timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+file_base_name = f"photo_{timestamp}"
+file_name = f"{file_base_name}.{ext}"
+
 
             try:
                 # Завантажуємо фото
