@@ -33,7 +33,9 @@ creds = Credentials.from_authorized_user_file(GOOGLE_TOKEN_FILE, SCOPES)
 drive_service = build('drive', 'v3', credentials=creds)
 sheets_service = build('sheets', 'v4', credentials=creds)
 
+
 def find_sheet_name(sheet_id, file_base_name):
+    """Шукає лист, назва якого містить file_base_name (регістр ігнорується)."""
     try:
         spreadsheet = sheets_service.spreadsheets().get(spreadsheetId=sheet_id).execute()
         sheets = spreadsheet.get('sheets', [])
@@ -46,6 +48,7 @@ def find_sheet_name(sheet_id, file_base_name):
     except Exception as e:
         print(f"Помилка при пошуку листа: {e}")
         return None
+
 
 def get_barcodes_from_sheet(sheet_id, sheet_name):
     try:
@@ -61,8 +64,9 @@ def get_barcodes_from_sheet(sheet_id, sheet_name):
     except Exception as e:
         return f"Помилка при зчитуванні штрихкодів: {str(e)}"
 
+
 def delayed_send_barcodes(user_id, file_base_name, file_name, delay=70):
-    time.sleep(delay)
+    time.sleep(delay)  # Чекаємо ~1 хв 10 сек
     sheet_name = find_sheet_name(SPREADSHEET_ID, file_base_name)
     if not sheet_name:
         text = f"❌ Не знайдено листа, який містить '{file_base_name}'"
@@ -76,6 +80,7 @@ def delayed_send_barcodes(user_id, file_base_name, file_name, delay=70):
     except Exception as e:
         print(f"Помилка при надсиланні штрихкодів: {e}")
 
+
 @app.route('/', methods=['POST'])
 def incoming():
     viber_request = viber.parse_request(request.get_data())
@@ -84,19 +89,24 @@ def incoming():
         message = viber_request.message
         user_id = viber_request.sender.id
 
+        # Перевірка, чи є медіа (зображення)
         if hasattr(message, 'media') and message.media:
             image_url = message.media
             ext = image_url.split('.')[-1].split('?')[0]
             if ext.lower() not in ['jpg', 'jpeg', 'png']:
                 ext = 'jpg'
+
             import datetime
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             file_base_name = f"photo_{timestamp}"
             file_name = f"{file_base_name}.{ext}"
+
             try:
+                # Завантажуємо фото з URL
                 img_data = requests.get(image_url).content
                 file_stream = io.BytesIO(img_data)
 
+                # Завантажуємо на Google Drive
                 media = MediaIoBaseUpload(file_stream, mimetype=f'image/{ext}')
                 file_metadata = {
                     'name': file_name,
@@ -108,10 +118,12 @@ def incoming():
                     fields='id'
                 ).execute()
 
+                # Відповідаємо користувачу
                 viber.send_messages(user_id, [
                     TextMessage(text=f"📥 Фото '{file_name}' отримано. Чекаємо штрихкоди...")
                 ])
 
+                # Запускаємо фоновий потік, який через delay відправить штрихкоди
                 threading.Thread(
                     target=delayed_send_barcodes,
                     args=(user_id, file_base_name, file_name),
@@ -125,9 +137,11 @@ def incoming():
 
     return Response(status=200)
 
+
 @app.route('/', methods=['GET'])
 def ping():
     return "OK", 200
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
