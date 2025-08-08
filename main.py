@@ -62,7 +62,7 @@ def get_barcodes_from_sheet(sheet_id, sheet_name):
     except Exception as e:
         return f"Помилка при зчитуванні штрихкодів: {str(e)}"
 
-def delayed_send_barcodes(user_id, file_base_name, file_name, delay=80):
+def delayed_send_barcodes(user_id, file_base_name, file_name, delay=70):
     time.sleep(delay)  # Чекаємо 2 хвилини
     sheet_name = find_sheet_name(SPREADSHEET_ID, file_base_name)
     if not sheet_name:
