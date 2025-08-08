@@ -56,9 +56,10 @@ def get_barcodes_from_sheet(sheet_id, sheet_name):
             range=f"{sheet_name}!A:A"
         ).execute()
         values = result.get('values', [])
+        # Перевірка позначки [NO_BARCODE]
+        if not values or (len(values) == 1 and values[0][0] == "[NO_BARCODE]"):
+            return None  # Позначаємо, що штрихкодів немає
         barcodes = [row[0] for row in values if row]
-        if not barcodes:
-            return "Штрихкоди не знайдено."
         return "\n".join(barcodes)
     except Exception as e:
         return f"Помилка при зчитуванні штрихкодів: {str(e)}"
@@ -68,10 +69,13 @@ def delayed_send_barcodes(user_id, file_base_name, file_name, delay=80):
     time.sleep(delay)  # Чекаємо ~1 хв 20 сек
     sheet_name = find_sheet_name(SPREADSHEET_ID, file_base_name)
     if not sheet_name:
-        text = f"❌ Не знайдено листа, який точно співпадає з '{file_base_name}'"
+        text = f"❌ Не знайдено листа з назвою '{file_base_name}'"
     else:
         barcodes_text = get_barcodes_from_sheet(SPREADSHEET_ID, sheet_name)
-        text = f"📸 Фото: {file_name}\n🔍 Штрихкоди з листа '{sheet_name}':\n{barcodes_text}"
+        if barcodes_text is None:
+            text = f"❌ Штрихкодів у фото '{file_name}' не знайдено."
+        else:
+            text = f"📸 Фото: {file_name}\n🔍 Штрихкоди з листа '{sheet_name}':\n{barcodes_text}"
     try:
         viber.send_messages(user_id, [
             TextMessage(text=text)
