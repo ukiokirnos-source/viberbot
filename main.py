@@ -34,7 +34,6 @@ drive_service = build('drive', 'v3', credentials=creds)
 sheets_service = build('sheets', 'v4', credentials=creds)
 
 def find_sheet_name(sheet_id, file_base_name):
-    """Шукає лист, назва якого містить file_base_name (регістр ігнорується)."""
     try:
         spreadsheet = sheets_service.spreadsheets().get(spreadsheetId=sheet_id).execute()
         sheets = spreadsheet.get('sheets', [])
@@ -63,7 +62,7 @@ def get_barcodes_from_sheet(sheet_id, sheet_name):
         return f"Помилка при зчитуванні штрихкодів: {str(e)}"
 
 def delayed_send_barcodes(user_id, file_base_name, file_name, delay=70):
-    time.sleep(delay)  # Чекаємо 2 хвилини
+    time.sleep(delay)
     sheet_name = find_sheet_name(SPREADSHEET_ID, file_base_name)
     if not sheet_name:
         text = f"❌ Не знайдено листа, який містить '{file_base_name}'"
@@ -85,7 +84,7 @@ def incoming():
         message = viber_request.message
         user_id = viber_request.sender.id
 
-                if hasattr(message, 'media') and message.media:
+        if hasattr(message, 'media') and message.media:
             image_url = message.media
             ext = image_url.split('.')[-1].split('?')[0]
             if ext.lower() not in ['jpg', 'jpeg', 'png']:
@@ -95,11 +94,9 @@ def incoming():
             file_base_name = f"photo_{timestamp}"
             file_name = f"{file_base_name}.{ext}"
             try:
-                # Завантажуємо фото
                 img_data = requests.get(image_url).content
                 file_stream = io.BytesIO(img_data)
 
-                # Завантажуємо на Google Drive
                 media = MediaIoBaseUpload(file_stream, mimetype=f'image/{ext}')
                 file_metadata = {
                     'name': file_name,
@@ -111,12 +108,10 @@ def incoming():
                     fields='id'
                 ).execute()
 
-                # Відповідаємо користувачу
                 viber.send_messages(user_id, [
                     TextMessage(text=f"📥 Фото '{file_name}' отримано. Чекаємо штрихкоди...")
                 ])
 
-                # Фоновий потік для надсилання штрихкодів
                 threading.Thread(
                     target=delayed_send_barcodes,
                     args=(user_id, file_base_name, file_name),
