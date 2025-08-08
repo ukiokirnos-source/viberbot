@@ -85,17 +85,15 @@ def incoming():
         message = viber_request.message
         user_id = viber_request.sender.id
 
-        if hasattr(message, 'media') and message.media:
+                if hasattr(message, 'media') and message.media:
             image_url = message.media
             ext = image_url.split('.')[-1].split('?')[0]
             if ext.lower() not in ['jpg', 'jpeg', 'png']:
                 ext = 'jpg'
             import datetime
-timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-file_base_name = f"photo_{timestamp}"
-file_name = f"{file_base_name}.{ext}"
-
-
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            file_base_name = f"photo_{timestamp}"
+            file_name = f"{file_base_name}.{ext}"
             try:
                 # Завантажуємо фото
                 img_data = requests.get(image_url).content
