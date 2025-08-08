@@ -35,15 +35,14 @@ sheets_service = build('sheets', 'v4', credentials=creds)
 
 
 def find_sheet_name(sheet_id, file_base_name):
-    """Шукає лист, назва якого містить file_base_name (регістр ігнорується)."""
+    """Шукає лист, назва якого точно співпадає з file_base_name."""
     try:
         spreadsheet = sheets_service.spreadsheets().get(spreadsheetId=sheet_id).execute()
         sheets = spreadsheet.get('sheets', [])
-        file_base_name_lower = file_base_name.lower()
         for sheet in sheets:
-            title = sheet.get('properties', {}).get('title', '').lower()
-            if file_base_name_lower in title:
-                return sheet.get('properties', {}).get('title')
+            title = sheet.get('properties', {}).get('title', '')
+            if title == file_base_name:
+                return title
         return None
     except Exception as e:
         print(f"Помилка при пошуку листа: {e}")
@@ -65,11 +64,11 @@ def get_barcodes_from_sheet(sheet_id, sheet_name):
         return f"Помилка при зчитуванні штрихкодів: {str(e)}"
 
 
-def delayed_send_barcodes(user_id, file_base_name, file_name, delay=70):
-    time.sleep(delay)  # Чекаємо ~1 хв 10 сек
+def delayed_send_barcodes(user_id, file_base_name, file_name, delay=80):
+    time.sleep(delay)  # Чекаємо ~1 хв 20 сек
     sheet_name = find_sheet_name(SPREADSHEET_ID, file_base_name)
     if not sheet_name:
-        text = f"❌ Не знайдено листа, який містить '{file_base_name}'"
+        text = f"❌ Не знайдено листа, який точно співпадає з '{file_base_name}'"
     else:
         barcodes_text = get_barcodes_from_sheet(SPREADSHEET_ID, sheet_name)
         text = f"📸 Фото: {file_name}\n🔍 Штрихкоди з листа '{sheet_name}':\n{barcodes_text}"
