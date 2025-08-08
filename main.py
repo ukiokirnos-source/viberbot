@@ -33,6 +33,8 @@ creds = Credentials.from_authorized_user_file(GOOGLE_TOKEN_FILE, SCOPES)
 drive_service = build('drive', 'v3', credentials=creds)
 sheets_service = build('sheets', 'v4', credentials=creds)
 
+# Множина для збереження оброблених message_token
+processed_message_tokens = set()
 
 def add_public_permission(file_id):
     try:
@@ -48,7 +50,6 @@ def add_public_permission(file_id):
     except Exception as e:
         print(f"Помилка при додаванні публічного доступу: {e}")
 
-
 def find_sheet_name(sheet_id, file_base_name):
     try:
         spreadsheet = sheets_service.spreadsheets().get(spreadsheetId=sheet_id).execute()
@@ -61,7 +62,6 @@ def find_sheet_name(sheet_id, file_base_name):
     except Exception as e:
         print(f"Помилка при пошуку листа: {e}")
         return None
-
 
 def get_barcodes_from_sheet(sheet_id, sheet_name):
     try:
@@ -76,7 +76,6 @@ def get_barcodes_from_sheet(sheet_id, sheet_name):
         return "\n".join(barcodes)
     except Exception as e:
         return f"Помилка при зчитуванні штрихкодів: {str(e)}"
-
 
 def delayed_send_barcodes(user_id, file_base_name, file_name, delay=80):
     time.sleep(delay)
@@ -96,10 +95,16 @@ def delayed_send_barcodes(user_id, file_base_name, file_name, delay=80):
     except Exception as e:
         print(f"Помилка при надсиланні штрихкодів: {e}")
 
-
 @app.route('/', methods=['POST'])
 def incoming():
     viber_request = viber.parse_request(request.get_data())
+
+    # Фільтр дублювань
+    message_token = getattr(viber_request, 'message_token', None)
+    if message_token in processed_message_tokens:
+        print(f"Дубль повідомлення {message_token}, ігноруємо")
+        return Response(status=200)
+    processed_message_tokens.add(message_token)
 
     if isinstance(viber_request, ViberMessageRequest):
         message = viber_request.message
@@ -151,11 +156,9 @@ def incoming():
 
     return Response(status=200)
 
-
 @app.route('/', methods=['GET'])
 def ping():
     return "OK", 200
-
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
