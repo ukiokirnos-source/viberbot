@@ -20,7 +20,7 @@ SPREADSHEET_ID = "1W_fiI8FiwDn0sKq0ks7rGcWhXB0HEcHxar1uK4GL1P8"
 GOOGLE_TOKEN_FILE = "token.json"
 SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/spreadsheets.readonly']
 
-DAILY_LIMIT = 15  # Ліміт фото на день для кожного користувача
+DAILY_LIMIT = 8  # Ліміт фото на день для кожного користувача
 
 app = Flask(__name__)
 
