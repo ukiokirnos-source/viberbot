@@ -2,11 +2,12 @@ import io
 import threading
 import time
 import requests
+import datetime
 from flask import Flask, request, Response
 from viberbot import Api
 from viberbot.api.bot_configuration import BotConfiguration
 from viberbot.api.messages.text_message import TextMessage
-from viberbot.api.viber_requests import ViberMessageRequest
+from viberbot.api.viber_requests import ViberMessageRequest, ViberConversationStartedRequest
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -18,6 +19,13 @@ GDRIVE_FOLDER_ID = "1FteobWxkEUxPq1kBhUiP70a4-X0slbWe"
 SPREADSHEET_ID = "1W_fiI8FiwDn0sKq0ks7rGcWhXB0HEcHxar1uK4GL1P8"
 GOOGLE_TOKEN_FILE = "token.json"
 SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/spreadsheets.readonly']
+
+# Ліміт фото на день
+DAILY_LIMIT = 15  # ← Можеш змінювати тут
+
+# Збереження кількості відправлених фото користувачами
+user_photo_count = {}
+last_reset_date = datetime.date.today()
 
 app = Flask(__name__)
 
@@ -36,6 +44,14 @@ sheets_service = build('sheets', 'v4', credentials=creds)
 # Множина для збереження оброблених message_token
 processed_message_tokens = set()
 
+def reset_daily_limits():
+    """Скидає ліміти щодня о 00:00."""
+    global last_reset_date, user_photo_count
+    today = datetime.date.today()
+    if today != last_reset_date:
+        user_photo_count = {}
+        last_reset_date = today
+
 def add_public_permission(file_id):
     try:
         permission = {
@@ -46,7 +62,6 @@ def add_public_permission(file_id):
             fileId=file_id,
             body=permission
         ).execute()
-        print(f"Додано публічний доступ до файлу {file_id}")
     except Exception as e:
         print(f"Помилка при додаванні публічного доступу: {e}")
 
@@ -89,20 +104,25 @@ def delayed_send_barcodes(user_id, file_base_name, file_name, delay=80):
         else:
             text = f"📸 Фото: {file_name}\n🔍 Штрихкоди з листа '{sheet_name}':\n{barcodes_text}"
     try:
-        viber.send_messages(user_id, [
-            TextMessage(text=text)
-        ])
+        viber.send_messages(user_id, [TextMessage(text=text)])
     except Exception as e:
         print(f"Помилка при надсиланні штрихкодів: {e}")
 
 @app.route('/', methods=['POST'])
 def incoming():
+    reset_daily_limits()
     viber_request = viber.parse_request(request.get_data())
+
+    # Відправка привітання при першому запуску
+    if isinstance(viber_request, ViberConversationStartedRequest):
+        viber.send_messages(viber_request.user.id, [
+            TextMessage(text="Привіт! Відправ мені накладну зі штрихкодами у гарній якості")
+        ])
+        return Response(status=200)
 
     # Фільтр дублювань
     message_token = getattr(viber_request, 'message_token', None)
     if message_token in processed_message_tokens:
-        print(f"Дубль повідомлення {message_token}, ігноруємо")
         return Response(status=200)
     processed_message_tokens.add(message_token)
 
@@ -111,12 +131,19 @@ def incoming():
         user_id = viber_request.sender.id
 
         if hasattr(message, 'media') and message.media:
+            # Перевірка ліміту
+            count = user_photo_count.get(user_id, 0)
+            if count >= DAILY_LIMIT:
+                viber.send_messages(user_id, [
+                    TextMessage(text=f"🚫 Ви досягли ліміту {DAILY_LIMIT} фото на сьогодні.")
+                ])
+                return Response(status=200)
+
             image_url = message.media
             ext = image_url.split('.')[-1].split('?')[0]
             if ext.lower() not in ['jpg', 'jpeg', 'png']:
                 ext = 'jpg'
 
-            import datetime
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             file_base_name = f"photo_{timestamp}"
             file_name = f"{file_base_name}.{ext}"
@@ -140,8 +167,10 @@ def incoming():
                 add_public_permission(file_id)
 
                 viber.send_messages(user_id, [
-                    TextMessage(text=f"📥 Фото '{file_name}' отримано. Чекаємо штрихкоди...")
+                    TextMessage(text=f"📥 Фото '{file_name}' отримано. Оброблюю. Час очікування : 2 хв")
                 ])
+
+                user_photo_count[user_id] = count + 1
 
                 threading.Thread(
                     target=delayed_send_barcodes,
