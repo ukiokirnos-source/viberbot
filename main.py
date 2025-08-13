@@ -23,7 +23,7 @@ SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.
 
 DAILY_LIMIT = 8  # стандартний ліміт фото на день
 
-ADMIN_ID = "тут_твій_user_id"  # встав свій user_id для адмін-панелі
+ADMIN_ID = "uJBIST3PYaJLoflfY/9zkQ=="  # встав свій user_id для адмін-панелі
 
 app = Flask(__name__)
 
