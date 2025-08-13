@@ -102,22 +102,34 @@ def add_public_permission(file_id):
     except Exception as e:
         print(f"Помилка при додаванні доступу: {e}")
 
-def delayed_send_barcodes(user_id, file_base_name, file_name, delay=80):
-    time.sleep(delay)
+def get_barcodes_from_sheet(sheet_id, sheet_name):
     try:
         result = sheets_service.spreadsheets().values().get(
-            spreadsheetId=SPREADSHEET_ID,
-            range=f"Лист1!A:A"
+            spreadsheetId=sheet_id,
+            range=f"{sheet_name}!A:A"
         ).execute()
         values = result.get('values', [])
-        if not values:
-            text = f"❌ Штрихкодів для фото '{file_name}' не знайдено."
+        if not values or (len(values) == 1 and values[0][0] == "[NO_BARCODE]"):
+            return None
+        return "\n".join(row[0] for row in values if row)
+    except Exception as e:
+        return f"Помилка при зчитуванні штрихкодів: {str(e)}"
+
+def delayed_send_barcodes(user_id, file_base_name, file_name, delay=80):
+    time.sleep(delay)
+    sheet_name = find_sheet_name(SPREADSHEET_ID, file_base_name)
+    if not sheet_name:
+        text = f"❌ Не знайдено листа з назвою '{file_base_name}'"
+    else:
+        barcodes_text = get_barcodes_from_sheet(SPREADSHEET_ID, sheet_name)
+        if barcodes_text is None:
+            text = f"❌ Штрихкодів у фото '{file_name}' не знайдено."
         else:
-            barcodes = "\n".join(row[0] for row in values if row)
-            text = f"📸 Фото: {file_name}\n🔍 Штрихкоди:\n{barcodes}"
+            text = f"📸 Фото: {file_name}\n🔍 Штрихкоди з листа '{sheet_name}':\n{barcodes_text}"
+    try:
         viber.send_messages(user_id, [TextMessage(text=text)])
     except Exception as e:
-        viber.send_messages(user_id, [TextMessage(text=f"❌ Помилка при відправці штрихкодів: {e}")])
+        print(f"Помилка при надсиланні штрихкодів: {e}")
 
 # ==== Основний маршрут ====
 @app.route('/', methods=['POST'])
