@@ -19,15 +19,17 @@ VIBER_TOKEN = "4fdbb2493ae7ddc2-cd8869c327e2c592-60fd2dddaa295531"
 GDRIVE_FOLDER_ID = "1FteobWxkEUxPq1kBhUiP70a4-X0slbWe"
 SPREADSHEET_ID = "1W_fiI8FiwDn0sKq0ks7rGcWhXB0HEcHxar1uK4GL1P8"
 GOOGLE_TOKEN_FILE = "token.json"
-SCOPES = ['https://www.googleapis.com/auth/drive.file',
-          'https://www.googleapis.com/auth/spreadsheets']
+SCOPES = [
+    'https://www.googleapis.com/auth/drive.file',
+    'https://www.googleapis.com/auth/spreadsheets'
+]
 
 DAILY_LIMIT_DEFAULT = 8
 ADMIN_ID = "uJBIST3PYaJLoflfY/9zkQ=="
 
 app = Flask(__name__)
 
-# ==== Ініціалізація Viber ====
+# ==== Ініціалізація Viber бота ====
 viber = Api(BotConfiguration(
     name='ФотоЗагрузBot',
     avatar='https://example.com/avatar.jpg',
@@ -40,9 +42,8 @@ drive_service = build('drive', 'v3', credentials=creds)
 sheets_service = build('sheets', 'v4', credentials=creds)
 
 processed_message_tokens = set()
-admin_state = {}  # для інтерактивного зміни ліміту {user_id: {"step":1/2, "target":id}}
 
-# ==== Табличка користувачів ====
+# ==== Робота з таблицею ====
 def get_all_users():
     result = sheets_service.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID,
@@ -54,7 +55,7 @@ def find_user_row(user_id):
     rows = get_all_users()
     for idx, row in enumerate(rows):
         if len(row) > 0 and row[0] == user_id:
-            return idx + 1, row
+            return idx + 1, row  # +1 бо індексація з 1 у Sheets
     return None, None
 
 def add_new_user(user_id, name):
@@ -82,7 +83,6 @@ def update_user_limit(row_number, new_limit):
         body={"values": [[new_limit]]}
     ).execute()
 
-# ==== Адмінські клавіатури ====
 def send_admin_keyboard(user_id):
     keyboard = {
         "Type": "keyboard",
@@ -94,13 +94,27 @@ def send_admin_keyboard(user_id):
     }
     viber.send_messages(user_id, [KeyboardMessage(keyboard=keyboard)])
 
-# ==== Фото та штрихкоди ====
+# ==== Робота з Google Drive ====
 def add_public_permission(file_id):
     try:
         permission = {'type': 'anyone', 'role': 'reader'}
         drive_service.permissions().create(fileId=file_id, body=permission).execute()
     except Exception as e:
         print(f"Помилка при додаванні доступу: {e}")
+
+# ==== Робота зі штрихкодами ====
+def find_sheet_name(sheet_id, file_base_name):
+    try:
+        spreadsheet = sheets_service.spreadsheets().get(spreadsheetId=sheet_id).execute()
+        sheets = spreadsheet.get('sheets', [])
+        for sheet in sheets:
+            title = sheet.get('properties', {}).get('title', '')
+            if title == file_base_name:
+                return title
+        return None
+    except Exception as e:
+        print(f"Помилка при пошуку листа: {e}")
+        return None
 
 def get_barcodes_from_sheet(sheet_id, sheet_name):
     try:
@@ -135,11 +149,10 @@ def delayed_send_barcodes(user_id, file_base_name, file_name, delay=80):
 @app.route('/', methods=['POST'])
 def incoming():
     viber_request = viber.parse_request(request.get_data())
-    user_id = getattr(viber_request, 'sender', None) and viber_request.sender.id
 
     if isinstance(viber_request, ViberConversationStartedRequest):
         viber.send_messages(viber_request.user.id, [
-            TextMessage(text="Привіт! Відправ мені накладну зі штрихкодами.")
+            TextMessage(text="Привіт! Відправ мені накладну зі штрихкодами.\nЩоб дізнатися свій ID, напиши: my_id")
         ])
         if viber_request.user.id == ADMIN_ID:
             send_admin_keyboard(viber_request.user.id)
@@ -156,39 +169,35 @@ def incoming():
         user_name = viber_request.sender.name
         text = getattr(message, 'text', '').strip().lower()
 
-        # === Адмінський інтерактив ===
+        # Адмінські кнопки
         if user_id == ADMIN_ID:
-            if user_id in admin_state:
-                state = admin_state[user_id]
-                if state["step"] == 1:
-                    state["target"] = text
-                    state["step"] = 2
-                    viber.send_messages(user_id, [TextMessage(text=f"Введіть новий ліміт для {text}:")])
-                    return Response(status=200)
-                elif state["step"] == 2:
-                    target_id = state["target"]
-                    new_limit = text
-                    row_num, row = find_user_row(target_id)
-                    if row_num:
-                        update_user_limit(row_num, new_limit)
-                        viber.send_messages(user_id, [TextMessage(text=f"✅ Ліміт змінено для {target_id} → {new_limit}")])
-                    else:
-                        viber.send_messages(user_id, [TextMessage(text="Користувач не знайдений")])
-                    admin_state.pop(user_id)
-                    return Response(status=200)
+            send_admin_keyboard(user_id)
 
-            # кнопки
-            if text == "change_limit":
-                admin_state[user_id] = {"step": 1, "target": None}
-                viber.send_messages(user_id, [TextMessage(text="Введіть ID користувача для зміни ліміту:")])
-                return Response(status=200)
-            elif text == "check_users":
+            if text == "check_users":
                 users = get_all_users()
                 msg = "Список користувачів:\n"
-                for row in users[1:]:
+                for row in users[1:]:  # пропускаємо заголовок
                     msg += f"{row[0]} | {row[1]} | Ліміт: {row[2]} | Фото: {row[3]}\n"
                 viber.send_messages(user_id, [TextMessage(text=msg)])
                 return Response(status=200)
+
+            if text.startswith("set_limit"):
+                parts = text.split()
+                if len(parts) == 3:
+                    uid, limit_str = parts[1], parts[2]
+                    row_num, row = find_user_row(uid)
+                    if row_num:
+                        update_user_limit(row_num, limit_str)
+                        viber.send_messages(user_id, [TextMessage(text=f"Ліміт змінено для {uid} → {limit_str}")])
+                    else:
+                        viber.send_messages(user_id, [TextMessage(text="Користувач не знайдений")])
+                else:
+                    viber.send_messages(user_id, [TextMessage(text="Формат: set_limit <user_id> <new_limit>")])
+                return Response(status=200)
+
+        if text == "my_id":
+            viber.send_messages(user_id, [TextMessage(text=f"Ваш user_id: {user_id}")])
+            return Response(status=200)
 
         # Додаємо користувача якщо нема
         row_num, row = find_user_row(user_id)
@@ -203,7 +212,7 @@ def incoming():
             viber.send_messages(user_id, [TextMessage(text=f"🚫 Ви досягли ліміту {limit} фото на сьогодні.")])
             return Response(status=200)
 
-        # === Обробка фото ===
+        # Обробка фото
         if hasattr(message, 'media') and message.media:
             image_url = message.media
             ext = image_url.split('.')[-1].split('?')[0]
@@ -228,6 +237,8 @@ def incoming():
 
                 file_id = file.get('id')
                 add_public_permission(file_id)
+
+                # Оновлюємо лічильник
                 update_user_counter(row_num, uploaded_today + 1)
 
                 viber.send_messages(user_id, [
