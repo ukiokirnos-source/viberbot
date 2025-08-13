@@ -21,8 +21,9 @@ SPREADSHEET_ID = "1W_fiI8FiwDn0sKq0ks7rGcWhXB0HEcHxar1uK4GL1P8"
 GOOGLE_TOKEN_FILE = "token.json"
 SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/spreadsheets.readonly']
 
-DAILY_LIMIT_DEFAULT = 8  # Ліміт фото на день для кожного користувача
-ADMIN_ID = "твій_адмін_ID"
+DAILY_LIMIT = 8  # стандартний ліміт фото на день
+
+ADMIN_ID = "твій_user_id"  # встав свій Viber user_id, щоб бачити адмін-панель
 
 app = Flask(__name__)
 
@@ -39,16 +40,37 @@ drive_service = build('drive', 'v3', credentials=creds)
 sheets_service = build('sheets', 'v4', credentials=creds)
 
 processed_message_tokens = set()
-user_photo_count = {}  # user_id -> кількість фото сьогодні
-user_limits = {}       # user_id -> ліміт фото на день (адмін може змінювати)
+user_photo_count = {}        # user_id -> кількість фото сьогодні
+custom_limits = {}           # user_id -> індивіальний ліміт
 
-# ==== Функції роботи з Google ====
+# ==== Клавіатури ====
+def user_keyboard():
+    return {
+        "Type": "keyboard",
+        "DefaultHeight": True,
+        "Buttons": [
+            {"Columns": 6, "Rows": 1, "Text": "📷 Відправ фото", "ActionType": "reply", "ActionBody": "send_photo"},
+            {"Columns": 6, "Rows": 1, "Text": "🆔 Мій ID", "ActionType": "reply", "ActionBody": "my_id"}
+        ]
+    }
+
+def admin_keyboard():
+    return {
+        "Type": "keyboard",
+        "DefaultHeight": True,
+        "Buttons": [
+            {"Columns": 6, "Rows": 1, "Text": "👤 Перегляд користувачів", "ActionType": "reply", "ActionBody": "list_users"},
+            {"Columns": 6, "Rows": 1, "Text": "✏️ Змінити ліміт", "ActionType": "reply", "ActionBody": "change_limit"},
+            {"Columns": 6, "Rows": 1, "Text": "↩️ Назад", "ActionType": "reply", "ActionBody": "back"}
+        ]
+    }
+
+# ==== Функції для Google Drive/Sheets ====
 def add_public_permission(file_id):
     try:
-        permission = {'type': 'anyone', 'role': 'reader'}
-        drive_service.permissions().create(fileId=file_id, body=permission).execute()
+        drive_service.permissions().create(fileId=file_id, body={'type': 'anyone', 'role': 'reader'}).execute()
     except Exception as e:
-        print(f"[{datetime.datetime.now()}] Помилка при додаванні доступу (file_id={file_id}): {e}")
+        print(f"Помилка при додаванні доступу: {e}")
 
 def find_sheet_name(sheet_id, file_base_name):
     try:
@@ -60,7 +82,7 @@ def find_sheet_name(sheet_id, file_base_name):
                 return title
         return None
     except Exception as e:
-        print(f"[{datetime.datetime.now()}] Помилка при пошуку листа: {e}")
+        print(f"Помилка при пошуку листа: {e}")
         return None
 
 def get_barcodes_from_sheet(sheet_id, sheet_name):
@@ -76,7 +98,6 @@ def get_barcodes_from_sheet(sheet_id, sheet_name):
     except Exception as e:
         return f"Помилка при зчитуванні штрихкодів: {str(e)}"
 
-# ==== Відкладена відправка штрихкодів ====
 def delayed_send_barcodes(user_id, file_base_name, file_name, delay=80):
     time.sleep(delay)
     sheet_name = find_sheet_name(SPREADSHEET_ID, file_base_name)
@@ -91,39 +112,17 @@ def delayed_send_barcodes(user_id, file_base_name, file_name, delay=80):
     try:
         viber.send_messages(user_id, [TextMessage(text=text)])
     except Exception as e:
-        print(f"[{datetime.datetime.now()}] Помилка надсилання штрихкодів user_id={user_id}: {e}")
+        print(f"Помилка при надсиланні штрихкодів: {e}")
 
-# ==== Клавіатури ====
-def admin_keyboard():
-    return {
-        "Type": "keyboard",
-        "Buttons": [
-            {"Columns": 6, "Rows": 1, "Text": "📊 Перегляд користувачів", "ActionType": "reply", "ActionBody": "view_users"},
-            {"Columns": 6, "Rows": 1, "Text": "🔄 Змінити ліміт", "ActionType": "reply", "ActionBody": "change_limit"},
-            {"Columns": 6, "Rows": 1, "Text": "⬅️ Назад", "ActionType": "reply", "ActionBody": "back"}
-        ],
-        "InputFieldState": "hidden"
-    }
-
-def user_keyboard():
-    return {
-        "Type": "keyboard",
-        "Buttons": [
-            {"Columns": 6, "Rows": 1, "Text": "📋 Мій ID", "ActionType": "reply", "ActionBody": "my_id"},
-            {"Columns": 6, "Rows": 1, "Text": "📊 Залишок фото", "ActionType": "reply", "ActionBody": "remaining"}
-        ],
-        "InputFieldState": "hidden"
-    }
-
-# ==== Обробка вхідних повідомлень ====
+# ==== Обробка запитів ====
 @app.route('/', methods=['POST'])
 def incoming():
     viber_request = viber.parse_request(request.get_data())
 
+    # Привітальне повідомлення при першому запуску
     if isinstance(viber_request, ViberConversationStartedRequest):
         viber.send_messages(viber_request.user.id, [
-            TextMessage(text="Привіт! Відправ мені накладну зі штрихкодами у гарній якості.",
-                        keyboard=user_keyboard())
+            KeyboardMessage(keyboard=user_keyboard(), text="Привіт! Відправ мені накладну зі штрихкодами у гарній якості.")
         ])
         return Response(status=200)
 
@@ -135,51 +134,42 @@ def incoming():
     if isinstance(viber_request, ViberMessageRequest):
         message = viber_request.message
         user_id = viber_request.sender.id
+        is_admin = str(user_id) == ADMIN_ID
 
-        # ==== Команди для користувача ====
-        if hasattr(message, 'text') and message.text:
-            text = message.text.lower()
+        # --- Команди ---
+        if hasattr(message, 'text'):
+            text = message.text.strip()
 
             if text == "my_id":
-                viber.send_messages(user_id, [TextMessage(text=f"Ваш ID: {user_id}")])
+                viber.send_messages(user_id, [TextMessage(text=f"Твій ID: {user_id}")])
                 return Response(status=200)
 
-            if text == "remaining":
-                limit = user_limits.get(user_id, DAILY_LIMIT_DEFAULT)
-                used = user_photo_count.get(user_id, 0)
-                viber.send_messages(user_id, [TextMessage(text=f"Залишилось фото сьогодні: {limit - used}")])
-                return Response(status=200)
-
-            # ==== Команди для адміна ====
-            if str(user_id) == ADMIN_ID:
-                if text == "view_users":
-                    users_text = "\n".join([f"{uid}: {user_photo_count.get(uid,0)}/{user_limits.get(uid,DAILY_LIMIT_DEFAULT)}" 
-                                            for uid in user_photo_count.keys()]) or "Немає активних користувачів"
-                    viber.send_messages(user_id, [TextMessage(text=users_text, keyboard=admin_keyboard())])
+            if is_admin:
+                if text == "list_users":
+                    if not user_photo_count:
+                        viber.send_messages(user_id, [TextMessage(text="Немає користувачів")])
+                    else:
+                        msg = "\n".join([f"{uid} - {user_photo_count[uid]} фото" for uid in user_photo_count])
+                        viber.send_messages(user_id, [TextMessage(text=msg)])
                     return Response(status=200)
 
                 if text == "change_limit":
-                    viber.send_messages(user_id, [TextMessage(text="Введіть user_id та новий ліміт через пробіл (user_id limit)", 
-                                                              keyboard=admin_keyboard())])
+                    viber.send_messages(user_id, [TextMessage(text="Введіть user_id та новий ліміт у форматі: user_id:limit")])
                     return Response(status=200)
 
-                if " " in text and text.split()[0].isdigit():
+                if ":" in text:
                     try:
-                        uid, new_limit = text.split()
-                        user_limits[int(uid)] = int(new_limit)
-                        viber.send_messages(user_id, [TextMessage(text=f"Ліміт для {uid} змінено на {new_limit}", keyboard=admin_keyboard())])
+                        uid, new_limit = text.split(":")
+                        custom_limits[uid.strip()] = int(new_limit.strip())
+                        viber.send_messages(user_id, [TextMessage(text=f"Ліміт користувача {uid} змінено на {new_limit}")])
                     except:
-                        viber.send_messages(user_id, [TextMessage(text="Помилка введення", keyboard=admin_keyboard())])
+                        viber.send_messages(user_id, [TextMessage(text="Помилка формату")])
                     return Response(status=200)
 
-                if text == "back":
-                    viber.send_messages(user_id, [TextMessage(text="Меню", keyboard=admin_keyboard())])
-                    return Response(status=200)
-
-        # ==== Обробка фото ====
+        # --- Обробка фото ---
         if hasattr(message, 'media') and message.media:
-            limit = user_limits.get(user_id, DAILY_LIMIT_DEFAULT)
             count = user_photo_count.get(user_id, 0)
+            limit = custom_limits.get(str(user_id), DAILY_LIMIT)
 
             if count >= limit:
                 viber.send_messages(user_id, [TextMessage(text=f"🚫 Ви досягли ліміту {limit} фото на сьогодні.")])
@@ -201,19 +191,17 @@ def incoming():
                 media = MediaIoBaseUpload(file_stream, mimetype=f'image/{ext}')
                 file_metadata = {'name': file_name, 'parents': [GDRIVE_FOLDER_ID]}
                 file = drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-                file_id = file.get('id')
-                add_public_permission(file_id)
+                add_public_permission(file.get('id'))
 
-                # Збільшуємо лічильник фото
                 user_photo_count[user_id] = count + 1
                 remaining = limit - user_photo_count[user_id]
+
                 if remaining == 3:
                     viber.send_messages(user_id, [TextMessage(text=f"⚠️ У вас залишилось {remaining} фото на сьогодні.")])
 
                 viber.send_messages(user_id, [TextMessage(text=f"📥 Фото '{file_name}' отримано.\nОброблюю. Час очікування: 2 хв")])
 
                 threading.Thread(target=delayed_send_barcodes, args=(user_id, file_base_name, file_name), daemon=True).start()
-
             except Exception as e:
                 viber.send_messages(user_id, [TextMessage(text=f"❌ Помилка при обробці зображення: {e}")])
 
