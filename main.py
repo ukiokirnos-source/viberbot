@@ -7,9 +7,6 @@ from flask import Flask, request, Response
 from viberbot import Api
 from viberbot.api.bot_configuration import BotConfiguration
 from viberbot.api.messages.text_message import TextMessage
-from viberbot.api.messages.keyboard_message import KeyboardMessage
-from viberbot.api.messages.rich_media_message import RichMediaMessage
-from viberbot.api.messages.data_types.rich_media import RichMedia, RichMediaButton
 from viberbot.api.viber_requests import ViberMessageRequest, ViberConversationStartedRequest
 
 from google.oauth2.credentials import Credentials
@@ -45,7 +42,7 @@ sheets_service = build('sheets', 'v4', credentials=creds)
 
 processed_message_tokens = set()
 
-# ==== Робота з таблицею ====
+# ==== Таблиця ====
 def get_all_users():
     result = sheets_service.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID,
@@ -94,9 +91,9 @@ def send_admin_keyboard(user_id):
             {"Columns": 6, "Rows": 1, "Text": "Змінити ліміт", "ActionType": "reply", "ActionBody": "change_limit"}
         ]
     }
-    viber.send_messages(user_id, [KeyboardMessage(keyboard=keyboard)])
+    viber.send_messages(user_id, [TextMessage(keyboard=keyboard)])
 
-# ==== Робота з Google Drive ====
+# ==== Google Drive ====
 def add_public_permission(file_id):
     try:
         permission = {'type': 'anyone', 'role': 'reader'}
@@ -104,7 +101,7 @@ def add_public_permission(file_id):
     except Exception as e:
         print(f"Помилка при додаванні доступу: {e}")
 
-# ==== Робота зі штрихкодами ====
+# ==== Штрихкоди ====
 def find_sheet_name(sheet_id, file_base_name):
     try:
         spreadsheet = sheets_service.spreadsheets().get(spreadsheetId=sheet_id).execute()
@@ -131,50 +128,40 @@ def get_barcodes_from_sheet(sheet_id, sheet_name):
     except Exception as e:
         return f"Помилка при зчитуванні штрихкодів: {str(e)}"
 
-def delayed_send_barcodes_with_photo(user_id, file_base_name, file_name, file_id, reporter_name):
-    time.sleep(80)
-    sheet_name = find_sheet_name(SPREADSHEET_ID, file_base_name)
-    if not sheet_name:
-        text = f"❌ Не знайдено листа з назвою '{file_base_name}'"
-    else:
-        barcodes_text = get_barcodes_from_sheet(SPREADSHEET_ID, sheet_name)
-        if barcodes_text is None:
-            text = f"❌ Штрихкодів у фото '{file_name}' не знайдено."
-        else:
-            text = f"📸 Фото: {file_name}\n🔍 Штрихкоди з листа '{sheet_name}':\n{barcodes_text}"
-
-    try:
-        file_url = f"https://drive.google.com/uc?id={file_id}"
-        rich_media = RichMedia(
-            ButtonsGroupColumns=6,
-            ButtonsGroupRows=7,
-            BgColor="#FFFFFF",
-            Buttons=[
-                RichMediaButton(
-                    Columns=6,
-                    Rows=5,
-                    ActionType="open-url",
-                    ActionBody=file_url,
-                    Image=file_url
-                ),
-                RichMediaButton(
-                    Columns=6,
-                    Rows=2,
-                    Text="❌ Помилка",
-                    TextVAlign="middle",
-                    TextHAlign="center",
-                    BgColor="#FF0000",
-                    ActionType="reply",
-                    ActionBody=f"report:{reporter_name}:{file_name}"
-                )
+# ==== Надсилання фото + штрихкод + кнопка ====
+def send_photo_with_barcodes(user_id, file_name, file_url, barcodes_text):
+    text = f"📸 Фото: {file_name}\n🔍 Штрихкоди:\n{barcodes_text}"
+    
+    # JSON кнопки
+    payload = {
+        "receiver": user_id,
+        "min_api_version": 7,
+        "type": "rich_media",
+        "rich_media": {
+            "Type": "rich_media",
+            "ButtonsGroupColumns": 6,
+            "Buttons": [
+                {
+                    "Columns": 6,
+                    "Rows": 3,
+                    "ActionType": "open-url",
+                    "ActionBody": file_url,
+                    "Image": file_url
+                },
+                {
+                    "Columns": 6,
+                    "Rows": 1,
+                    "Text": "❌ Помилка",
+                    "ActionType": "reply",
+                    "ActionBody": f"error_report|{user_id}|{file_name}",
+                    "TextVAlign": "middle",
+                    "TextHAlign": "center",
+                    "BgColor": "#FF0000"
+                }
             ]
-        )
-        # Надсилаємо фото з кнопкою
-        viber.send_messages(user_id, [RichMediaMessage(rich_media=rich_media)])
-        # Одночасно надсилаємо текст зі штрихкодами
-        viber.send_messages(user_id, [TextMessage(text=text)])
-    except Exception as e:
-        print(f"Помилка при надсиланні фото зі штрихкодами: {e}")
+        }
+    }
+    viber._post("send_message", payload)  # прямий POST
 
 # ==== Основний маршрут ====
 @app.route('/', methods=['POST'])
@@ -203,7 +190,6 @@ def incoming():
         # Адмінські кнопки
         if user_id == ADMIN_ID:
             send_admin_keyboard(user_id)
-
             if text == "check_users":
                 users = get_all_users()
                 msg = "Список користувачів:\n"
@@ -211,7 +197,6 @@ def incoming():
                     msg += f"{row[0]} | {row[1]} | Ліміт: {row[2]} | Фото: {row[3]}\n"
                 viber.send_messages(user_id, [TextMessage(text=msg)])
                 return Response(status=200)
-
             if text.startswith("set_limit"):
                 parts = text.split()
                 if len(parts) == 3:
@@ -228,6 +213,12 @@ def incoming():
 
         if text == "my_id":
             viber.send_messages(user_id, [TextMessage(text=f"Ваш user_id: {user_id}")])
+            return Response(status=200)
+
+        # Обробка скарг від кнопки
+        if text.startswith("error_report"):
+            _, report_user_id, file_name = text.split("|")
+            viber.send_messages(ADMIN_ID, [TextMessage(text=f"⚠️ Користувач {report_user_id} поскаржився на фото {file_name}")])
             return Response(status=200)
 
         # Додаємо користувача якщо нема
@@ -272,27 +263,18 @@ def incoming():
                 # Оновлюємо лічильник
                 update_user_counter(row_num, uploaded_today + 1)
 
-                viber.send_messages(user_id, [
-                    TextMessage(text=f"📥 Фото '{file_name}' отримано. Оброблюю (2 хв)...")
-                ])
-
-                # Запускаємо потік обробки та надсилання фото+штрихкодів+кнопки
                 threading.Thread(
-                    target=delayed_send_barcodes_with_photo,
-                    args=(user_id, file_base_name, file_name, file_id, user_name),
+                    target=lambda: send_photo_with_barcodes(
+                        user_id,
+                        file_name,
+                        f"https://drive.google.com/uc?id={file_id}",
+                        get_barcodes_from_sheet(SPREADSHEET_ID, find_sheet_name(SPREADSHEET_ID, file_base_name) or "")
+                    ),
                     daemon=True
                 ).start()
 
             except Exception as e:
                 viber.send_messages(user_id, [TextMessage(text=f"❌ Помилка при обробці: {e}")])
-
-    # Обробка кнопки "Помилка" (відправка адміну)
-    if isinstance(viber_request, ViberMessageRequest) and text.startswith("report:"):
-        parts = text.split(":")
-        if len(parts) == 3:
-            reporter, photo_name = parts[1], parts[2]
-            viber.send_messages(ADMIN_ID, [TextMessage(text=f"⚠ Користувач {reporter} поскаржився на фото {photo_name}")])
-        return Response(status=200)
 
     return Response(status=200)
 
