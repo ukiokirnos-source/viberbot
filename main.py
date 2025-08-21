@@ -9,7 +9,6 @@ from viberbot.api.bot_configuration import BotConfiguration
 from viberbot.api.messages.text_message import TextMessage
 from viberbot.api.messages.keyboard_message import KeyboardMessage
 from viberbot.api.messages.picture_message import PictureMessage
-from viberbot.api.messages.data_types.keyboard import Keyboard
 from viberbot.api.viber_requests import ViberMessageRequest, ViberConversationStartedRequest
 
 from google.oauth2.credentials import Credentials
