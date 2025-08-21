@@ -14,9 +14,9 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
 # ==== Налаштування ====
-VIBER_TOKEN = "4fdbb2493ae7ddc2-cd8869c327e2c592-60fd2dddaa295531"
-GDRIVE_FOLDER_ID = "1FteobWxkEUxPq1kBhUiP70a4-X0slbWe"
-SPREADSHEET_ID = "1W_fiI8FiwDn0sKq0ks7rGcWhXB0HEcHxar1uK4GL1P8"
+VIBER_TOKEN = "ТВОЙ_VIBER_TOKEN"
+GDRIVE_FOLDER_ID = "ТВОЙ_FOLDER_ID"
+SPREADSHEET_ID = "ТВОЙ_SPREADSHEET_ID"
 GOOGLE_TOKEN_FILE = "token.json"
 SCOPES = [
     'https://www.googleapis.com/auth/drive.file',
@@ -27,22 +27,20 @@ DAILY_LIMIT_DEFAULT = 8
 ADMIN_ID = "uJBIST3PYaJLoflfY/9zkQ=="
 
 app = Flask(__name__)
-
-# ==== Ініціалізація Viber бота ====
 viber = Api(BotConfiguration(
     name='ФотоЗагрузBot',
     avatar='https://example.com/avatar.jpg',
     auth_token=VIBER_TOKEN
 ))
 
-# ==== Ініціалізація Google API ====
+# ==== Google API ====
 creds = Credentials.from_authorized_user_file(GOOGLE_TOKEN_FILE, SCOPES)
 drive_service = build('drive', 'v3', credentials=creds)
 sheets_service = build('sheets', 'v4', credentials=creds)
 
 processed_message_tokens = set()
 
-# ==== Таблиця ====
+# ==== Робота з таблицею ====
 def get_all_users():
     result = sheets_service.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID,
@@ -117,9 +115,14 @@ def get_barcodes_from_sheet(sheet_id, sheet_name):
     except Exception as e:
         return f"Помилка при зчитуванні штрихкодів: {str(e)}"
 
-# ==== Надсилання фото + штрихкод + кнопка ====
+# ==== Відправка фото + штрихкоди + кнопка ====
 def send_photo_with_barcodes(user_id, file_name, file_url, barcodes_text):
-    # Створюємо RichMedia
+    time.sleep(80)  # Затримка
+
+    # Текст
+    viber.send_messages(user_id, [TextMessage(text=f"✅ Фото отримано: {file_name}\n🔍 Штрихкоди:\n{barcodes_text}")])
+
+    # Кнопка
     rich_media = {
         "Type": "rich_media",
         "ButtonsGroupColumns": 6,
@@ -143,8 +146,7 @@ def send_photo_with_barcodes(user_id, file_name, file_url, barcodes_text):
             }
         ]
     }
-    text = f"📸 Фото: {file_name}\n🔍 Штрихкоди:\n{barcodes_text}"
-    viber.send_messages(user_id, [RichMediaMessage(rich_media=rich_media, text=text)])
+    viber.send_messages(user_id, [RichMediaMessage(rich_media=rich_media)])
 
 # ==== Основний маршрут ====
 @app.route('/', methods=['POST'])
@@ -168,10 +170,12 @@ def incoming():
         user_name = viber_request.sender.name
         text = getattr(message, 'text', '').strip().lower()
 
+        # Команда my_id
         if text == "my_id":
             viber.send_messages(user_id, [TextMessage(text=f"Ваш user_id: {user_id}")])
             return Response(status=200)
 
+        # Обробка кнопки ❌ Помилка
         if text.startswith("error_report"):
             _, report_user_id, file_name = text.split("|")
             viber.send_messages(ADMIN_ID, [TextMessage(text=f"⚠️ Користувач {report_user_id} поскаржився на фото {file_name}")])
@@ -215,23 +219,15 @@ def incoming():
 
                 file_id = file.get('id')
                 add_public_permission(file_id)
-
-                # Оновлюємо лічильник
                 update_user_counter(row_num, uploaded_today + 1)
 
-                # Одразу повідомлення про отримання
-                viber.send_messages(user_id, [TextMessage(text=f"✅ Фото отримано: {file_name}")])
-
-                # Відправка штрихкодів через 80 секунд у окремому потоці
+                # Потік для фото + штрихкод + кнопка
                 threading.Thread(
-                    target=lambda uid=user_id, fname=file_name, fid=file_id: (
-                        time.sleep(80),
-                        send_photo_with_barcodes(
-                            uid,
-                            fname,
-                            f"https://drive.google.com/uc?id={fid}",
-                            get_barcodes_from_sheet(SPREADSHEET_ID, find_sheet_name(SPREADSHEET_ID, fname) or "")
-                        )
+                    target=lambda uid=user_id, fname=file_base_name: send_photo_with_barcodes(
+                        uid,
+                        f"{fname}.{ext}",
+                        f"https://drive.google.com/uc?id={file_id}",
+                        get_barcodes_from_sheet(SPREADSHEET_ID, find_sheet_name(SPREADSHEET_ID, fname) or "")
                     ),
                     daemon=True
                 ).start()
