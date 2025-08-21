@@ -91,7 +91,7 @@ def send_admin_keyboard(user_id):
             {"Columns": 6, "Rows": 1, "Text": "Змінити ліміт", "ActionType": "reply", "ActionBody": "change_limit"}
         ]
     }
-    viber.send_messages(user_id, [TextMessage(text="Адмінські дії:", keyboard=keyboard)])
+    viber.send_messages(user_id, [TextMessage(text="Оберіть дію:", keyboard=keyboard)])
 
 # ==== Google Drive ====
 def add_public_permission(file_id):
@@ -117,22 +117,21 @@ def find_sheet_name(sheet_id, file_base_name):
 
 def get_barcodes_from_sheet(sheet_id, sheet_name):
     try:
+        if not sheet_name:
+            return "Штрихкодів не знайдено."
         result = sheets_service.spreadsheets().values().get(
             spreadsheetId=sheet_id,
             range=f"{sheet_name}!A:A"
         ).execute()
         values = result.get('values', [])
         if not values or (len(values) == 1 and values[0][0] == "[NO_BARCODE]"):
-            return None
+            return "Штрихкодів не знайдено."
         return "\n".join(row[0] for row in values if row)
     except Exception as e:
         return f"Помилка при зчитуванні штрихкодів: {str(e)}"
 
 # ==== Надсилання фото + штрихкод + кнопка ====
 def send_photo_with_barcodes(user_id, file_name, file_url, barcodes_text):
-    text = f"📸 Фото: {file_name}\n🔍 Штрихкоди:\n{barcodes_text}"
-    
-    # JSON кнопки
     payload = {
         "receiver": user_id,
         "min_api_version": 7,
@@ -161,7 +160,7 @@ def send_photo_with_barcodes(user_id, file_name, file_url, barcodes_text):
             ]
         }
     }
-    viber._post("send_message", payload)  # прямий POST
+    viber._post("send_message", payload)
 
 # ==== Основний маршрут ====
 @app.route('/', methods=['POST'])
