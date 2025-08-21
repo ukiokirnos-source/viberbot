@@ -91,7 +91,7 @@ def send_admin_keyboard(user_id):
             {"Columns": 6, "Rows": 1, "Text": "Змінити ліміт", "ActionType": "reply", "ActionBody": "change_limit"}
         ]
     }
-    viber.send_messages(user_id, [TextMessage(keyboard=keyboard)])
+    viber.send_messages(user_id, [TextMessage(text="Адмінські дії:", keyboard=keyboard)])
 
 # ==== Google Drive ====
 def add_public_permission(file_id):
