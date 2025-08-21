@@ -1,12 +1,12 @@
 import io
 import threading
-import time
-import requests
 import datetime
+import requests
 from flask import Flask, request, Response
 from viberbot import Api
 from viberbot.api.bot_configuration import BotConfiguration
 from viberbot.api.messages.text_message import TextMessage
+from viberbot.api.messages.rich_media_message import RichMediaMessage
 from viberbot.api.viber_requests import ViberMessageRequest, ViberConversationStartedRequest
 
 from google.oauth2.credentials import Credentials
@@ -82,17 +82,6 @@ def update_user_limit(row_number, new_limit):
         body={"values": [[new_limit]]}
     ).execute()
 
-def send_admin_keyboard(user_id):
-    keyboard = {
-        "Type": "keyboard",
-        "DefaultHeight": True,
-        "Buttons": [
-            {"Columns": 6, "Rows": 1, "Text": "Перевірити користувачів", "ActionType": "reply", "ActionBody": "check_users"},
-            {"Columns": 6, "Rows": 1, "Text": "Змінити ліміт", "ActionType": "reply", "ActionBody": "change_limit"}
-        ]
-    }
-    viber.send_messages(user_id, [TextMessage(text="Оберіть дію:", keyboard=keyboard)])
-
 # ==== Google Drive ====
 def add_public_permission(file_id):
     try:
@@ -117,50 +106,46 @@ def find_sheet_name(sheet_id, file_base_name):
 
 def get_barcodes_from_sheet(sheet_id, sheet_name):
     try:
-        if not sheet_name:
-            return "Штрихкодів не знайдено."
         result = sheets_service.spreadsheets().values().get(
             spreadsheetId=sheet_id,
             range=f"{sheet_name}!A:A"
         ).execute()
         values = result.get('values', [])
         if not values or (len(values) == 1 and values[0][0] == "[NO_BARCODE]"):
-            return "Штрихкодів не знайдено."
+            return "Штрихкодів немає"
         return "\n".join(row[0] for row in values if row)
     except Exception as e:
         return f"Помилка при зчитуванні штрихкодів: {str(e)}"
 
 # ==== Надсилання фото + штрихкод + кнопка ====
 def send_photo_with_barcodes(user_id, file_name, file_url, barcodes_text):
-    payload = {
-        "receiver": user_id,
-        "min_api_version": 7,
-        "type": "rich_media",
-        "rich_media": {
-            "Type": "rich_media",
-            "ButtonsGroupColumns": 6,
-            "Buttons": [
-                {
-                    "Columns": 6,
-                    "Rows": 3,
-                    "ActionType": "open-url",
-                    "ActionBody": file_url,
-                    "Image": file_url
-                },
-                {
-                    "Columns": 6,
-                    "Rows": 1,
-                    "Text": "❌ Помилка",
-                    "ActionType": "reply",
-                    "ActionBody": f"error_report|{user_id}|{file_name}",
-                    "TextVAlign": "middle",
-                    "TextHAlign": "center",
-                    "BgColor": "#FF0000"
-                }
-            ]
-        }
+    text_msg = TextMessage(text=f"📸 Фото отримано: {file_name}\n🔍 Штрихкоди:\n{barcodes_text}")
+    viber.send_messages(user_id, [text_msg])
+
+    rich_media = {
+        "Type": "rich_media",
+        "ButtonsGroupColumns": 6,
+        "Buttons": [
+            {
+                "Columns": 6,
+                "Rows": 3,
+                "ActionType": "open-url",
+                "ActionBody": file_url,
+                "Image": file_url
+            },
+            {
+                "Columns": 6,
+                "Rows": 1,
+                "Text": "❌ Помилка",
+                "ActionType": "reply",
+                "ActionBody": f"error_report|{user_id}|{file_name}",
+                "TextVAlign": "middle",
+                "TextHAlign": "center",
+                "BgColor": "#FF0000"
+            }
+        ]
     }
-    viber._post("send_message", payload)
+    viber.send_messages(user_id, [RichMediaMessage(rich_media=rich_media)])
 
 # ==== Основний маршрут ====
 @app.route('/', methods=['POST'])
@@ -171,8 +156,6 @@ def incoming():
         viber.send_messages(viber_request.user.id, [
             TextMessage(text="Привіт! Відправ мені накладну зі штрихкодами.\nЩоб дізнатися свій ID, напиши: my_id")
         ])
-        if viber_request.user.id == ADMIN_ID:
-            send_admin_keyboard(viber_request.user.id)
         return Response(status=200)
 
     message_token = getattr(viber_request, 'message_token', None)
@@ -186,30 +169,7 @@ def incoming():
         user_name = viber_request.sender.name
         text = getattr(message, 'text', '').strip().lower()
 
-        # Адмінські кнопки
-        if user_id == ADMIN_ID:
-            send_admin_keyboard(user_id)
-            if text == "check_users":
-                users = get_all_users()
-                msg = "Список користувачів:\n"
-                for row in users[1:]:
-                    msg += f"{row[0]} | {row[1]} | Ліміт: {row[2]} | Фото: {row[3]}\n"
-                viber.send_messages(user_id, [TextMessage(text=msg)])
-                return Response(status=200)
-            if text.startswith("set_limit"):
-                parts = text.split()
-                if len(parts) == 3:
-                    uid, limit_str = parts[1], parts[2]
-                    row_num, row = find_user_row(uid)
-                    if row_num:
-                        update_user_limit(row_num, limit_str)
-                        viber.send_messages(user_id, [TextMessage(text=f"Ліміт змінено для {uid} → {limit_str}")])
-                    else:
-                        viber.send_messages(user_id, [TextMessage(text="Користувач не знайдений")])
-                else:
-                    viber.send_messages(user_id, [TextMessage(text="Формат: set_limit <user_id> <new_limit>")])
-                return Response(status=200)
-
+        # Команда для перевірки свого ID
         if text == "my_id":
             viber.send_messages(user_id, [TextMessage(text=f"Ваш user_id: {user_id}")])
             return Response(status=200)
@@ -262,6 +222,7 @@ def incoming():
                 # Оновлюємо лічильник
                 update_user_counter(row_num, uploaded_today + 1)
 
+                # Надсилаємо фото + штрихкоди
                 threading.Thread(
                     target=lambda: send_photo_with_barcodes(
                         user_id,
