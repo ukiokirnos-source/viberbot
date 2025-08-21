@@ -1,61 +1,140 @@
-import logging
-import json
+import io
+import threading
+import time
+import requests
 import datetime
 from flask import Flask, request, Response
 from viberbot import Api
 from viberbot.api.bot_configuration import BotConfiguration
-from viberbot.api.messages import TextMessage, PictureMessage
-from viberbot.api.viber_requests import ViberMessageRequest, ViberConversationStartedRequest, ViberSubscribedRequest, ViberUnsubscribedRequest
-from googleapiclient.discovery import build
-from google.oauth2.service_account import Credentials
+from viberbot.api.messages.text_message import TextMessage
+from viberbot.api.messages.keyboard_message import KeyboardMessage
+from viberbot.api.messages.picture_message import PictureMessage
+from viberbot.api.messages.data_types.keyboard import Keyboard
+from viberbot.api.viber_requests import ViberMessageRequest, ViberConversationStartedRequest
 
-# ------------------ НАЛАШТУВАННЯ ------------------
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
+
+# ==== Налаштування ====
 VIBER_TOKEN = "4fdbb2493ae7ddc2-cd8869c327e2c592-60fd2dddaa295531"
 GDRIVE_FOLDER_ID = "1FteobWxkEUxPq1kBhUiP70a4-X0slbWe"
 SPREADSHEET_ID = "1W_fiI8FiwDn0sKq0ks7rGcWhXB0HEcHxar1uK4GL1P8"
 GOOGLE_TOKEN_FILE = "token.json"
-SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/spreadsheets']
+SCOPES = [
+    'https://www.googleapis.com/auth/drive.file',
+    'https://www.googleapis.com/auth/spreadsheets'
+]
+
 DAILY_LIMIT_DEFAULT = 8
 ADMIN_ID = "uJBIST3PYaJLoflfY/9zkQ=="
 
 app = Flask(__name__)
 viber = Api(BotConfiguration(
-    name='BarcodeBot',
-    avatar='',
+    name='ФотоЗагрузBot',
+    avatar='https://example.com/avatar.jpg',
     auth_token=VIBER_TOKEN
 ))
 
-# ------------------ ЛОГІНГ ------------------
-logging.basicConfig(level=logging.INFO)
+creds = Credentials.from_authorized_user_file(GOOGLE_TOKEN_FILE, SCOPES)
+drive_service = build('drive', 'v3', credentials=creds)
+sheets_service = build('sheets', 'v4', credentials=creds)
 
-# ------------------ ПІДКЛЮЧЕННЯ GOOGLE ------------------
-creds = Credentials.from_service_account_file(GOOGLE_TOKEN_FILE, scopes=SCOPES)
-service_sheets = build('sheets', 'v4', credentials=creds)
-sheet = service_sheets.spreadsheets()
+processed_message_tokens = set()
 
-# ------------------ СТАН ------------------
-user_limits = {}            # {user_id: limit}
-last_barcode_messages = {}  # {user_id: [{"file_name": str, "time": datetime}]}
+# ==== Google Sheets функції ====
+def get_all_users():
+    result = sheets_service.spreadsheets().values().get(
+        spreadsheetId=SPREADSHEET_ID,
+        range="Лист1!A:D"
+    ).execute()
+    return result.get('values', [])
 
-# ------------------ ДОПОМІЖНІ ФУНКЦІЇ ------------------
-def get_limit(user_id):
-    return user_limits.get(user_id, DAILY_LIMIT_DEFAULT)
+def find_user_row(user_id):
+    rows = get_all_users()
+    for idx, row in enumerate(rows):
+        if len(row) > 0 and row[0] == user_id:
+            return idx + 1, row
+    return None, None
 
-def set_limit(user_id, new_limit):
-    user_limits[user_id] = new_limit
+def add_new_user(user_id, name):
+    sheets_service.spreadsheets().values().append(
+        spreadsheetId=SPREADSHEET_ID,
+        range="Лист1!A:D",
+        valueInputOption="RAW",
+        insertDataOption="INSERT_ROWS",
+        body={"values": [[user_id, name, DAILY_LIMIT_DEFAULT, 0]]}
+    ).execute()
 
-def save_barcode_info(user_id, file_name):
-    if user_id not in last_barcode_messages:
-        last_barcode_messages[user_id] = []
-    last_barcode_messages[user_id].append({
-        "file_name": file_name,
-        "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    })
-    # зберігаємо тільки останні 5, щоб не роздувати пам'ять
-    last_barcode_messages[user_id] = last_barcode_messages[user_id][-5:]
+def update_user_counter(row_number, new_count):
+    sheets_service.spreadsheets().values().update(
+        spreadsheetId=SPREADSHEET_ID,
+        range=f"Лист1!D{row_number}",
+        valueInputOption="RAW",
+        body={"values": [[new_count]]}
+    ).execute()
 
-def send_barcode_message(user_id, file_name, codes_text):
-    # клавіатура тільки для цього повідомлення
+def update_user_limit(row_number, new_limit):
+    sheets_service.spreadsheets().values().update(
+        spreadsheetId=SPREADSHEET_ID,
+        range=f"Лист1!C{row_number}",
+        valueInputOption="RAW",
+        body={"values": [[new_limit]]}
+    ).execute()
+
+# ==== Google Drive ====
+def add_public_permission(file_id):
+    try:
+        permission = {'type': 'anyone', 'role': 'reader'}
+        drive_service.permissions().create(fileId=file_id, body=permission).execute()
+    except Exception as e:
+        print(f"Помилка при додаванні доступу: {e}")
+
+# ==== Штрихкоди ====
+def find_sheet_name(sheet_id, file_base_name):
+    try:
+        spreadsheet = sheets_service.spreadsheets().get(spreadsheetId=sheet_id).execute()
+        sheets = spreadsheet.get('sheets', [])
+        for sheet in sheets:
+            title = sheet.get('properties', {}).get('title', '')
+            if title == file_base_name:
+                return title
+        return None
+    except Exception as e:
+        print(f"Помилка при пошуку листа: {e}")
+        return None
+
+def get_barcodes_from_sheet(sheet_id, sheet_name):
+    try:
+        result = sheets_service.spreadsheets().values().get(
+            spreadsheetId=sheet_id,
+            range=f"{sheet_name}!A:A"
+        ).execute()
+        values = result.get('values', [])
+        if not values or (len(values) == 1 and values[0][0] == "[NO_BARCODE]"):
+            return None
+        return "\n".join(row[0] for row in values if row)
+    except Exception as e:
+        return f"Помилка при зчитуванні штрихкодів: {str(e)}"
+
+def delayed_send_barcodes(user_id, file_base_name, file_name, delay=80):
+    time.sleep(delay)
+    sheet_name = find_sheet_name(SPREADSHEET_ID, file_base_name)
+    if not sheet_name:
+        text = f"❌ Не знайдено листа з назвою '{file_base_name}'"
+    else:
+        barcodes_text = get_barcodes_from_sheet(SPREADSHEET_ID, sheet_name)
+        if barcodes_text is None:
+            text = f"❌ Штрихкодів у фото '{file_name}' не знайдено."
+        else:
+            text = f"📸 Фото: {file_name}\n🔍 Штрихкоди з листа '{sheet_name}':\n{barcodes_text}"
+    try:
+        viber.send_messages(user_id, [TextMessage(text=text)])
+    except Exception as e:
+        print(f"Помилка при надсиланні штрихкодів: {e}")
+
+# ==== Надсилаємо фото з кнопкою "Помилка" ====
+def send_photo_with_error_button(user_id, image_url, photo_name):
     keyboard = {
         "Type": "keyboard",
         "DefaultHeight": False,
@@ -63,76 +142,140 @@ def send_barcode_message(user_id, file_name, codes_text):
             {
                 "Columns": 6,
                 "Rows": 1,
-                "BgColor": "#FF0000",
                 "ActionType": "reply",
-                "ActionBody": f"error_report|{file_name}",
-                "Text": "<font color='#FFFFFF'>⚠️ Помилка</font>"
+                "ActionBody": f"error_{photo_name}_{user_id}",
+                "Text": " Помилка⚠️",
+                "BgColor": "#FF5555",
+                "TextSize": "large"
             }
         ]
     }
     viber.send_messages(user_id, [
-        TextMessage(text=codes_text, keyboard=keyboard)
+        PictureMessage(
+            media=image_url,
+            text=f"Ваше фото: {photo_name}",
+            keyboard=keyboard,
+            min_api_version=6
+        )
     ])
-    save_barcode_info(user_id, file_name)
 
-def report_error_to_admin(user_id, file_name):
-    text = f"⚠️ Користувач {user_id} повідомив про помилку\nФото: {file_name}"
-    viber.send_messages(ADMIN_ID, [TextMessage(text=text)])
-
-# ------------------ ОБРОБКА ПОВІДОМЛЕНЬ ------------------
+# ==== Основний маршрут ====
 @app.route('/', methods=['POST'])
 def incoming():
     viber_request = viber.parse_request(request.get_data())
-    logging.info("Received request: %s", viber_request)
 
-    # Користувач запустив бота
     if isinstance(viber_request, ViberConversationStartedRequest):
         viber.send_messages(viber_request.user.id, [
-            TextMessage(text="Привіт! Надсилай фото штрихкодів.")
+            TextMessage(text="Привіт! Відправ мені накладну зі штрихкодами.\nЩоб дізнатися свій ID, напиши: my_id")
         ])
         return Response(status=200)
 
-    # Нове повідомлення
-    elif isinstance(viber_request, ViberMessageRequest):
-        user_id = viber_request.sender.id
+    message_token = getattr(viber_request, 'message_token', None)
+    if message_token in processed_message_tokens:
+        return Response(status=200)
+    processed_message_tokens.add(message_token)
+
+    if isinstance(viber_request, ViberMessageRequest):
         message = viber_request.message
+        user_id = viber_request.sender.id
+        user_name = viber_request.sender.name
+        text = getattr(message, 'text', '').strip().lower()
 
-        # Кнопка натиснута
-        if isinstance(message, TextMessage) and message.text.startswith("error_report|"):
-            file_name = message.text.split("|", 1)[1]
-            report_error_to_admin(user_id, file_name)
-            viber.send_messages(user_id, [
-                TextMessage(text="Дякуємо, ми повідомили адміністратора про помилку.")
-            ])
+        # ==== Адмінські функції ====
+        if user_id == ADMIN_ID:
+            if text == "check_users":
+                users = get_all_users()
+                msg = "Список користувачів:\n"
+                for row in users[1:]:
+                    msg += f"{row[0]} | {row[1]} | Ліміт: {row[2]} | Фото: {row[3]}\n"
+                viber.send_messages(user_id, [TextMessage(text=msg)])
+                return Response(status=200)
+            if text.startswith("set_limit"):
+                parts = text.split()
+                if len(parts) == 3:
+                    uid, limit_str = parts[1], parts[2]
+                    row_num, row = find_user_row(uid)
+                    if row_num:
+                        update_user_limit(row_num, limit_str)
+                        viber.send_messages(user_id, [TextMessage(text=f"Ліміт змінено для {uid} → {limit_str}")])
+                    else:
+                        viber.send_messages(user_id, [TextMessage(text="Користувач не знайдений")])
+                else:
+                    viber.send_messages(user_id, [TextMessage(text="Формат: set_limit <user_id> <new_limit>")])
+                return Response(status=200)
+
+        # ==== Користувач запитує свій ID ====
+        if text == "my_id":
+            viber.send_messages(user_id, [TextMessage(text=f"Ваш user_id: {user_id}")])
             return Response(status=200)
 
-        # Користувач відправив текст адміну: зміна ліміту
-        if user_id == ADMIN_ID and isinstance(message, TextMessage) and message.text.startswith("set_limit"):
+        # ==== Кнопка "Помилка" ====
+        if text.startswith("error_"):
+            parts = text.split("_")
+            photo_name = parts[1]
+            reported_user = parts[2]
+            viber.send_messages(ADMIN_ID, [TextMessage(text=f"❗ Користувач {reported_user} поскаржився на фото {photo_name}")])
+            viber.send_messages(user_id, [TextMessage(text="Дякую, адміністратор отримав вашу скаргу.")])
+            return Response(status=200)
+
+        # ==== Додаємо користувача якщо нема ====
+        row_num, row = find_user_row(user_id)
+        if not row_num:
+            add_new_user(user_id, user_name)
+            row_num, row = find_user_row(user_id)
+
+        limit = int(row[2])
+        uploaded_today = int(row[3])
+
+        if uploaded_today >= limit:
+            viber.send_messages(user_id, [TextMessage(text=f"🚫 Ви досягли ліміту {limit} фото на сьогодні.")])
+            return Response(status=200)
+
+        # ==== Обробка фото ====
+        if hasattr(message, 'media') and message.media:
+            image_url = message.media
+            ext = image_url.split('.')[-1].split('?')[0]
+            if ext.lower() not in ['jpg', 'jpeg', 'png']:
+                ext = 'jpg'
+
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            file_base_name = f"photo_{timestamp}"
+            file_name = f"{file_base_name}.{ext}"
+
             try:
-                _, target_id, new_limit = message.text.split()
-                new_limit = int(new_limit)
-                set_limit(target_id, new_limit)
-                viber.send_messages(ADMIN_ID, [TextMessage(text=f"Ліміт користувача {target_id} змінено на {new_limit}")])
+                img_data = requests.get(image_url).content
+                file_stream = io.BytesIO(img_data)
+
+                media = MediaIoBaseUpload(file_stream, mimetype=f'image/{ext}')
+                file_metadata = {'name': file_name, 'parents': [GDRIVE_FOLDER_ID]}
+                file = drive_service.files().create(
+                    body=file_metadata,
+                    media_body=media,
+                    fields='id'
+                ).execute()
+
+                file_id = file.get('id')
+                add_public_permission(file_id)
+
+                update_user_counter(row_num, uploaded_today + 1)
+
+                # Надсилаємо користувачу фото з кнопкою "Помилка"
+                send_photo_with_error_button(user_id, image_url, file_name)
+
+                threading.Thread(
+                    target=delayed_send_barcodes,
+                    args=(user_id, file_base_name, file_name),
+                    daemon=True
+                ).start()
+
             except Exception as e:
-                viber.send_messages(ADMIN_ID, [TextMessage(text=f"Помилка: {e}")])
-            return Response(status=200)
-
-        # Якщо прийшло фото
-        if isinstance(message, PictureMessage):
-            file_name = f"photo_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
-            # Тут повинно бути розпізнавання штрихкодів
-            fake_codes = ["123456789012", "987654321098"]  # тестові коди
-            codes_text = f"📸 Фото: {file_name}\n🔍 Штрихкоди:\n" + "\n".join(fake_codes)
-            send_barcode_message(user_id, file_name, codes_text)
-            return Response(status=200)
-
-        # Інакше просто текст
-        if isinstance(message, TextMessage):
-            viber.send_messages(user_id, [TextMessage(text="Надішли фото зі штрихкодами.")])
-            return Response(status=200)
+                viber.send_messages(user_id, [TextMessage(text=f"❌ Помилка при обробці: {e}")])
 
     return Response(status=200)
 
+@app.route('/', methods=['GET'])
+def ping():
+    return "OK", 200
 
-if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=8080, debug=True)
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
