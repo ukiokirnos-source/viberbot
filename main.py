@@ -4,12 +4,14 @@ import time
 import requests
 import datetime
 from flask import Flask, request, Response
+
 from viberbot import Api
 from viberbot.api.bot_configuration import BotConfiguration
 from viberbot.api.messages.text_message import TextMessage
 from viberbot.api.messages.keyboard_message import KeyboardMessage
-from viberbot.api.messages.data_types.rich_media import RichMedia, RichMediaButton
+from viberbot.api.messages.rich_media_message import RichMediaMessage, RichMedia, RichMediaButton
 from viberbot.api.viber_requests import ViberMessageRequest, ViberConversationStartedRequest
+
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
@@ -27,17 +29,23 @@ DAILY_LIMIT_DEFAULT = 8
 ADMIN_ID = "uJBIST3PYaJLoflfY/9zkQ=="
 
 app = Flask(__name__)
+
+# ==== Ініціалізація Viber бота ====
 viber = Api(BotConfiguration(
     name='ФотоЗагрузBot',
     avatar='https://example.com/avatar.jpg',
-    auth_token=VIBER_TOKEN
+    auth_token=VIBER_TOKEN,
+    api_version=2  # ключовий момент для Rich Media
 ))
+
+# ==== Ініціалізація Google API ====
 creds = Credentials.from_authorized_user_file(GOOGLE_TOKEN_FILE, SCOPES)
 drive_service = build('drive', 'v3', credentials=creds)
 sheets_service = build('sheets', 'v4', credentials=creds)
+
 processed_message_tokens = set()
 
-# ==== Google Sheets ====
+# ==== Робота з таблицею ====
 def get_all_users():
     result = sheets_service.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID,
@@ -88,7 +96,7 @@ def send_admin_keyboard(user_id):
     }
     viber.send_messages(user_id, [KeyboardMessage(keyboard=keyboard)])
 
-# ==== Google Drive ====
+# ==== Робота з Google Drive ====
 def add_public_permission(file_id):
     try:
         permission = {'type': 'anyone', 'role': 'reader'}
@@ -96,7 +104,7 @@ def add_public_permission(file_id):
     except Exception as e:
         print(f"Помилка при додаванні доступу: {e}")
 
-# ==== Штрихкоди ====
+# ==== Робота зі штрихкодами ====
 def find_sheet_name(sheet_id, file_base_name):
     try:
         spreadsheet = sheets_service.spreadsheets().get(spreadsheetId=sheet_id).execute()
@@ -118,45 +126,55 @@ def get_barcodes_from_sheet(sheet_id, sheet_name):
         ).execute()
         values = result.get('values', [])
         if not values or (len(values) == 1 and values[0][0] == "[NO_BARCODE]"):
-            return "Штрихкодів немає"
+            return None
         return "\n".join(row[0] for row in values if row)
     except Exception as e:
         return f"Помилка при зчитуванні штрихкодів: {str(e)}"
 
-# ==== Асинхронне надсилання фото + штрихкод + кнопка ====
-def send_photo_with_barcodes(user_id, file_base_name, file_name, file_url):
-    def task():
-        time.sleep(80)  # очікуємо 80 секунд
-        sheet_name = find_sheet_name(SPREADSHEET_ID, file_base_name)
-        barcodes_text = get_barcodes_from_sheet(SPREADSHEET_ID, sheet_name or "")
-        rich_media = RichMedia(
-            Type="rich_media",
-            ButtonsGroupColumns=6,
-            Buttons=[
-                RichMediaButton(
-                    Columns=6,
-                    Rows=3,
-                    ActionType="open-url",
-                    ActionBody=file_url,
-                    Image=file_url
-                ),
-                RichMediaButton(
-                    Columns=6,
-                    Rows=1,
-                    Text="❌ Помилка",
-                    ActionType="reply",
-                    ActionBody=f"error_report|{user_id}|{file_name}",
-                    TextVAlign="middle",
-                    TextHAlign="center",
-                    BgColor="#FF0000"
-                )
-            ]
+def delayed_send_barcodes(user_id, file_base_name, file_name, file_url, delay=80):
+    time.sleep(delay)
+    sheet_name = find_sheet_name(SPREADSHEET_ID, file_base_name)
+    if not sheet_name:
+        text = f"❌ Не знайдено листа з назвою '{file_base_name}'"
+    else:
+        barcodes_text = get_barcodes_from_sheet(SPREADSHEET_ID, sheet_name)
+        if barcodes_text is None:
+            text = f"❌ Штрихкодів у фото '{file_name}' не знайдено."
+        else:
+            text = f"📸 Фото: {file_name}\n🔍 Штрихкоди з листа '{sheet_name}':\n{barcodes_text}"
+
+    # Rich Media повідомлення з фото + текстом
+    try:
+        rich_media_msg = RichMediaMessage(
+            min_api_version=2,
+            rich_media=RichMedia(
+                Type="rich_media",
+                ButtonsGroupColumns=6,
+                Buttons=[
+                    RichMediaButton(
+                        Columns=6,
+                        Rows=3,
+                        ActionType="open-url",
+                        ActionBody=file_url,
+                        Image=file_url
+                    ),
+                    RichMediaButton(
+                        Columns=6,
+                        Rows=1,
+                        ActionType="reply",
+                        ActionBody="ok",
+                        Text=text,
+                        TextVAlign="middle",
+                        TextHAlign="center",
+                        BgColor="#FFFFFF"
+                    )
+                ]
+            )
         )
-        viber.send_messages(user_id, [
-            TextMessage(text=f"✅ Фото отримано: {file_name}\n🔍 Штрихкоди:\n{barcodes_text}"),
-            rich_media
-        ])
-    threading.Thread(target=task, daemon=True).start()
+        viber.send_messages(user_id, [rich_media_msg])
+    except Exception as e:
+        print(f"Помилка при надсиланні RichMedia: {e}")
+        viber.send_messages(user_id, [TextMessage(text=text)])
 
 # ==== Основний маршрут ====
 @app.route('/', methods=['POST'])
@@ -182,7 +200,7 @@ def incoming():
         user_name = viber_request.sender.name
         text = getattr(message, 'text', '').strip().lower()
 
-        # Адмін
+        # Адмінські кнопки
         if user_id == ADMIN_ID:
             send_admin_keyboard(user_id)
             if text == "check_users":
@@ -231,28 +249,37 @@ def incoming():
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             file_base_name = f"photo_{timestamp}"
             file_name = f"{file_base_name}.{ext}"
-
             try:
                 img_data = requests.get(image_url).content
                 file_stream = io.BytesIO(img_data)
                 media = MediaIoBaseUpload(file_stream, mimetype=f'image/{ext}')
                 file_metadata = {'name': file_name, 'parents': [GDRIVE_FOLDER_ID]}
-                file = drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+                file = drive_service.files().create(
+                    body=file_metadata,
+                    media_body=media,
+                    fields='id, webContentLink'
+                ).execute()
                 file_id = file.get('id')
+                file_url = file.get('webContentLink')
                 add_public_permission(file_id)
 
+                # Оновлюємо лічильник
                 update_user_counter(row_num, uploaded_today + 1)
 
-                # Миттєве повідомлення
-                viber.send_messages(user_id, [TextMessage(text=f"📥 Фото '{file_name}' отримано. Оброблюю (80 сек)...")])
+                viber.send_messages(user_id, [
+                    TextMessage(text=f"📥 Фото '{file_name}' отримано. Оброблюю (80 сек)...")
+                ])
 
-                # Асинхронне надсилання з кнопкою і штрихкодами
-                send_photo_with_barcodes(user_id, file_base_name, file_name, f"https://drive.google.com/uc?id={file_id}")
+                # Потік для затримки та відправки RichMedia
+                threading.Thread(
+                    target=delayed_send_barcodes,
+                    args=(user_id, file_base_name, file_name, file_url),
+                    daemon=True
+                ).start()
 
             except Exception as e:
                 viber.send_messages(user_id, [TextMessage(text=f"❌ Помилка при обробці: {e}")])
-
-    return Response(status=200)
+        return Response(status=200)
 
 @app.route('/', methods=['GET'])
 def ping():
