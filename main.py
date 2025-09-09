@@ -12,7 +12,6 @@ from viberbot.api.messages.picture_message import PictureMessage
 from viberbot.api.messages.rich_media_message import RichMediaMessage
 from viberbot.api.viber_requests import ViberMessageRequest, ViberConversationStartedRequest
 
-
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
@@ -134,7 +133,7 @@ def delayed_send_barcodes(user_id, file_base_name, file_name, public_url):
             "BgColor": "#FFFFFF",
             "Buttons": [
                 {
-                    "Columns": 4,
+                    "Columns": 2,            # менш широка
                     "Rows": 1,
                     "ActionType": "reply",
                     "ActionBody": f"report_{file_name}",
@@ -142,7 +141,9 @@ def delayed_send_barcodes(user_id, file_base_name, file_name, public_url):
                     "TextSize": "medium",
                     "TextVAlign": "middle",
                     "TextHAlign": "center",
-                    "BgColor": "#ff6666"
+                    "TextOpacity": 100,
+                    "TextColor": "#FFFFFF",   # білий текст
+                    "BgColor": "#ff4444"     # червоний фон
                 }
             ]
         }
