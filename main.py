@@ -9,6 +9,8 @@ from viberbot import Api
 from viberbot.api.bot_configuration import BotConfiguration
 from viberbot.api.messages.text_message import TextMessage
 from viberbot.api.messages.picture_message import PictureMessage
+from viberbot.api.messages.rich_media_message import RichMediaMessage
+from viberbot.api.messages.data_types.rich_media import RichMedia, Button
 from viberbot.api.viber_requests import ViberMessageRequest, ViberConversationStartedRequest
 
 from google.oauth2.credentials import Credentials
@@ -31,8 +33,8 @@ app = Flask(__name__)
 
 # ==== Ініціалізація Viber бота ====
 viber = Api(BotConfiguration(
-    name='ФотоЗагрузBot',
-    avatar='https://example.com/avatar.jpg',
+    name='Джексон',
+    avatar='https://www.flaticon.com/ru/free-icon/bot_4711994?term=%D0%B1%D0%BE%D1%82&page=1&position=13&origin=tag&related_id=4711994',
     auth_token=VIBER_TOKEN
 ))
 
@@ -118,19 +120,38 @@ def get_barcodes_from_sheet(sheet_id, sheet_name):
     except Exception as e:
         return f"Помилка при зчитуванні штрихкодів: {str(e)}"
 
-# ==== Delayed send ====
+# ==== Delayed send з кнопкою "Помилка" ====
 def delayed_send_barcodes(user_id, file_base_name, file_name, public_url):
     time.sleep(80)
 
-    # Надсилаємо фото
+    # Надсилаємо фото з кнопкою
     try:
+        rich_media = RichMedia(
+            Type="rich_media",
+            ButtonsGroupColumns=6,
+            ButtonsGroupRows=1,
+            BgColor="#FFFFFF",
+            Buttons=[
+                Button(
+                    Columns=2,
+                    Rows=1,
+                    ActionType="reply",
+                    ActionBody=f"REPORT:{public_url}",
+                    Text="📩 Помилка",
+                    TextSize="small",
+                    TextVAlign="middle",
+                    TextHAlign="center",
+                    BgColor="#CCCCCC"
+                )
+            ]
+        )
         viber.send_messages(user_id, [
-            PictureMessage(media=public_url, text=f"Фото: {file_name}")
+            RichMediaMessage(rich_media=rich_media, alt_text=f"Фото: {file_name}")
         ])
     except Exception as e:
-        print(f"Помилка при надсиланні фото: {e}")
+        print(f"Помилка при надсиланні фото з кнопкою: {e}")
 
-    # Надсилаємо тільки штрихкоди (без заголовку)
+    # Надсилаємо штрихкоди
     sheet_name = find_sheet_name(SPREADSHEET_ID, file_base_name)
     if not sheet_name:
         barcodes_text = f"❌ Не знайдено листа з назвою '{file_base_name}'"
@@ -174,7 +195,6 @@ def incoming():
                 viber.send_messages(ADMIN_ID, [
                     TextMessage(text=f"⚠️ Скарга від {user_name} ({user_id}): {text}")
                 ])
-                # Якщо це reply — пересилаємо повідомлення, на яке відповіли
                 if getattr(message, "reply_to", None):
                     original_message = message.reply_to
                     if hasattr(original_message, "text"):
