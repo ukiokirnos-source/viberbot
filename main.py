@@ -124,16 +124,16 @@ def delayed_send_barcodes(user_id, file_base_name, file_name, public_url):
     except Exception as e:
         print(f"Помилка при надсиланні фото: {e}")
 
-    # 2. Надсилаємо кнопку "Скарга"
+    # 2. Надсилаємо кнопку "Скарга" (на всю ширину)
     try:
         rich_media_dict = {
             "Type": "rich_media",
-            "ButtonsGroupColumns": 6,
+            "ButtonsGroupColumns": 6,  # повна ширина
             "ButtonsGroupRows": 1,
             "BgColor": "#FFFFFF",
             "Buttons": [
                 {
-                    "Columns": 2,            # менш широка
+                    "Columns": 6,          # кнопка на всю ширину
                     "Rows": 1,
                     "ActionType": "reply",
                     "ActionBody": f"report_{file_name}",
@@ -142,8 +142,8 @@ def delayed_send_barcodes(user_id, file_base_name, file_name, public_url):
                     "TextVAlign": "middle",
                     "TextHAlign": "center",
                     "TextOpacity": 100,
-                    "TextColor": "#FFFFFF",   # білий текст
-                    "BgColor": "#ff4444"     # червоний фон
+                    "TextColor": "#FFFFFF",
+                    "BgColor": "#ff4444"
                 }
             ]
         }
