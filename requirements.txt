@@ -1,7 +1,8 @@
-Flask
-viberbot
-google-auth
-google-auth-oauthlib
-google-auth-httplib2
-google-api-python-client
-gunicorn
+Flask==2.3.5
+requests==2.31.0
+viber-bot-python @ git+https://github.com/Viber/viber-bot-python.git
+google-auth==2.22.0
+google-auth-oauthlib==1.1.0
+google-auth-httplib2==0.1.0
+google-api-python-client==2.99.0
+gunicorn==20.1.0
