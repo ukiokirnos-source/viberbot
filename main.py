@@ -43,7 +43,7 @@ drive_service = build('drive', 'v3', credentials=creds)
 sheets_service = build('sheets', 'v4', credentials=creds)
 
 processed_message_tokens = set()
-pending_reports = {}  # user_id: photo_url
+pending_reports = {}  # file_name: photo_url
 
 # ==== Таблиця ====
 def get_all_users():
@@ -124,16 +124,16 @@ def delayed_send_barcodes(user_id, file_base_name, file_name, public_url):
     except Exception as e:
         print(f"Помилка при надсиланні фото: {e}")
 
-    # 2. Надсилаємо кнопку "Скарга" (на всю ширину)
+    # 2. Надсилаємо кнопку "Скарга"
     try:
         rich_media_dict = {
             "Type": "rich_media",
-            "ButtonsGroupColumns": 6,  # повна ширина
+            "ButtonsGroupColumns": 6,
             "ButtonsGroupRows": 1,
             "BgColor": "#FFFFFF",
             "Buttons": [
                 {
-                    "Columns": 6,          # кнопка на всю ширину
+                    "Columns": 6,
                     "Rows": 1,
                     "ActionType": "reply",
                     "ActionBody": f"report_{file_name}",
@@ -141,13 +141,13 @@ def delayed_send_barcodes(user_id, file_base_name, file_name, public_url):
                     "TextSize": "medium",
                     "TextVAlign": "middle",
                     "TextHAlign": "center",
+                    "BgColor": "#ff6666",
                     "TextOpacity": 100,
-                    "TextColor": "#FFFFFF",
-                    "BgColor": "#ff4444"
+                    "TextColor": "#FFFFFF"
                 }
             ]
         }
-        pending_reports[user_id] = public_url  # зберігаємо URL для кнопки
+        pending_reports[file_name] = public_url  # зберігаємо URL за file_name
         viber.send_messages(user_id, [
             RichMediaMessage(rich_media=rich_media_dict, min_api_version=2, alt_text="Скарга")
         ])
@@ -190,16 +190,18 @@ def incoming():
         text = getattr(message, 'text', '').strip().lower()
 
         # ==== Обробка натискання кнопки "Скарга" ====
-        if text.startswith("report_") and user_id in pending_reports:
-            photo_url = pending_reports.pop(user_id)
-            try:
-                viber.send_messages(ADMIN_ID, [
-                    TextMessage(text=f"⚠️ Скарга від {user_name} ({user_id})"),
-                    PictureMessage(media=photo_url, text="Фото користувача")
-                ])
-                viber.send_messages(user_id, [TextMessage(text="Скарга успішно надіслана адміну ✅")])
-            except Exception as e:
-                print(f"Помилка при відправці скарги адміну: {e}")
+        if text.startswith("report_"):
+            file_name = text[len("report_"):]
+            if file_name in pending_reports:
+                photo_url = pending_reports.pop(file_name)
+                try:
+                    viber.send_messages(ADMIN_ID, [
+                        TextMessage(text=f"⚠️ Скарга від {user_name} ({user_id})"),
+                        PictureMessage(media=photo_url, text="Фото користувача")
+                    ])
+                    viber.send_messages(user_id, [TextMessage(text="Скарга успішно надіслана адміну ✅")])
+                except Exception as e:
+                    print(f"Помилка при відправці скарги адміну: {e}")
             return Response(status=200)
 
         # Команда Айді
