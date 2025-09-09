@@ -11,7 +11,7 @@ from viberbot.api.messages.text_message import TextMessage
 from viberbot.api.messages.picture_message import PictureMessage
 from viberbot.api.messages.rich_media_message import RichMediaMessage
 from viberbot.api.viber_requests import ViberMessageRequest, ViberConversationStartedRequest
-from viberbot.api.messages.rich_media_message import RichMedia
+
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
