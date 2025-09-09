@@ -134,7 +134,7 @@ def delayed_send_barcodes(user_id, file_base_name, file_name, public_url):
     except Exception as e:
         print(f"Помилка при надсиланні фото: {e}")
 
-    # 2. Кнопка "Помилка"
+    # 2. Кнопка "Помилка" гарніша
     try:
         rich_media_dict = {
             "Type": "rich_media",
@@ -143,12 +143,16 @@ def delayed_send_barcodes(user_id, file_base_name, file_name, public_url):
             "BgColor": "#FFFFFF",
             "Buttons": [
                 {
-                    "Columns": 6,
+                    "Columns": 3,
                     "Rows": 1,
                     "ActionType": "reply",
-                    "ActionBody": "error_report",
-                    "Text": "Помилка",
-                    "BgColor": "#e6e6e6"
+                    "ActionBody": f"error_report|{public_url}",  # відправляємо посилання на фото адміну
+                    "Text": "⚠️ Помилка",
+                    "TextSize": "medium",
+                    "TextVAlign": "middle",
+                    "TextHAlign": "center",
+                    "BgColor": "#FF696180",  # напівпрозорий червоний
+                    "Silent": False
                 }
             ]
         }
