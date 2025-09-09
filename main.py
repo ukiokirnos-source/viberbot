@@ -10,6 +10,7 @@ from viberbot.api.bot_configuration import BotConfiguration
 from viberbot.api.messages.text_message import TextMessage
 from viberbot.api.messages.picture_message import PictureMessage
 from viberbot.api.messages.rich_media_message import RichMediaMessage
+from viberbot.api.messages.data_types.rich_media import RichMedia, Button
 from viberbot.api.viber_requests import ViberMessageRequest, ViberConversationStartedRequest
 
 from google.oauth2.credentials import Credentials
@@ -34,8 +35,7 @@ app = Flask(__name__)
 viber = Api(BotConfiguration(
     name='Джексон',
     avatar='https://www.flaticon.com/ru/free-icon/bot_4711994?term=%D0%B1%D0%BE%D1%82&page=1&position=13&origin=tag&related_id=4711994',
-    auth_token=VIBER_TOKEN,
-    api_version=2
+    auth_token=VIBER_TOKEN
 ))
 
 # ==== Ініціалізація Google API ====
@@ -126,27 +126,25 @@ def delayed_send_barcodes(user_id, file_base_name, file_name, public_url):
 
     # Надсилаємо фото з кнопкою "Помилка"
     try:
-        rich_media = {
-            "Type": "rich_media",
-            "ButtonsGroupColumns": 6,
-            "ButtonsGroupRows": 1,
-            "BgColor": "#FFFFFF",
-            "Buttons": [
-                {
-                    "Columns": 6,
-                    "Rows": 1,
-                    "ActionType": "reply",
-                    "ActionBody": f"REPORT:{public_url}",
-                    "Text": "📩 Помилка",
-                    "TextSize": "small",
-                    "TextVAlign": "middle",
-                    "TextHAlign": "center",
-                    "BgColor": "#CCCCCC"
-                }
-            ]
-        }
         viber.send_messages(user_id, [
-            RichMediaMessage(rich_media=rich_media, alt_text=f"Фото: {file_name}")
+            RichMediaMessage(
+                rich_media=RichMedia(
+                    Buttons=[Button(
+                        ActionType='reply',
+                        ActionBody='error_report',
+                        Text='Помилка',
+                        Columns=6,
+                        Rows=1,
+                        BgColor='#e6e6e6'
+                    )],
+                    ButtonsGroupColumns=6,
+                    ButtonsGroupRows=1
+                ),
+                keyboard=None,
+                min_api_version=2,
+                alt_text=f"Фото: {file_name}",
+                thumbnail=public_url
+            )
         ])
     except Exception as e:
         print(f"Помилка при надсиланні фото з кнопкою: {e}")
@@ -195,7 +193,6 @@ def incoming():
                 viber.send_messages(ADMIN_ID, [
                     TextMessage(text=f"⚠️ Скарга від {user_name} ({user_id}): {text}")
                 ])
-                # Якщо це reply — пересилаємо повідомлення, на яке відповіли
                 if getattr(message, "reply_to", None):
                     original_message = message.reply_to
                     if hasattr(original_message, "text"):
