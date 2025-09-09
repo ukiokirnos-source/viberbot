@@ -10,7 +10,7 @@ from viberbot.api.bot_configuration import BotConfiguration
 from viberbot.api.messages.text_message import TextMessage
 from viberbot.api.messages.picture_message import PictureMessage
 from viberbot.api.messages.rich_media_message import RichMediaMessage
-from viberbot.api.messages.rich_media_message import RichMediaMessage, RichMedia, Button
+from viberbot.api.messages.rich_media_message import RichMedia, Button
 from viberbot.api.viber_requests import ViberMessageRequest, ViberConversationStartedRequest
 
 from google.oauth2.credentials import Credentials
@@ -124,23 +124,22 @@ def get_barcodes_from_sheet(sheet_id, sheet_name):
 def delayed_send_barcodes(user_id, file_base_name, file_name, public_url):
     time.sleep(80)
 
-    # Надсилаємо фото з кнопкою "Помилка"
+    # Надсилаємо фото з кнопкою "Помилка" (спрощено для сумісності)
     try:
+        rich_media = RichMedia(
+            Buttons=[
+                Button(
+                    ActionType='reply',
+                    ActionBody='error_report',
+                    Text='Помилка'
+                )
+            ],
+            ButtonsGroupColumns=6,
+            ButtonsGroupRows=1
+        )
         viber.send_messages(user_id, [
             RichMediaMessage(
-                rich_media=RichMedia(
-                    Buttons=[Button(
-                        ActionType='reply',
-                        ActionBody='error_report',
-                        Text='Помилка',
-                        Columns=6,
-                        Rows=1,
-                        BgColor='#e6e6e6'
-                    )],
-                    ButtonsGroupColumns=6,
-                    ButtonsGroupRows=1
-                ),
-                keyboard=None,
+                rich_media=rich_media,
                 min_api_version=2,
                 alt_text=f"Фото: {file_name}",
                 thumbnail=public_url
