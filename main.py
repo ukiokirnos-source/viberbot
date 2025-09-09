@@ -121,6 +121,7 @@ def get_barcodes_from_sheet(sheet_id, sheet_name):
 # ==== Delayed send ====
 def delayed_send_barcodes(user_id, file_base_name, file_name, public_url):
     time.sleep(80)
+
     # Надсилаємо фото
     try:
         viber.send_messages(user_id, [
@@ -129,7 +130,7 @@ def delayed_send_barcodes(user_id, file_base_name, file_name, public_url):
     except Exception as e:
         print(f"Помилка при надсиланні фото: {e}")
 
-    # Надсилаємо штрихкоди
+    # Надсилаємо тільки штрихкоди (без заголовку)
     sheet_name = find_sheet_name(SPREADSHEET_ID, file_base_name)
     if not sheet_name:
         barcodes_text = f"❌ Не знайдено листа з назвою '{file_base_name}'"
@@ -139,7 +140,7 @@ def delayed_send_barcodes(user_id, file_base_name, file_name, public_url):
 
     try:
         viber.send_messages(user_id, [
-            TextMessage(text=f"🔍 Штрихкоди:\n{barcodes_text}")
+            TextMessage(text=barcodes_text)
         ])
     except Exception as e:
         print(f"Помилка при надсиланні штрихкодів: {e}")
@@ -151,7 +152,7 @@ def incoming():
 
     if isinstance(viber_request, ViberConversationStartedRequest):
         viber.send_messages(viber_request.user.id, [
-            TextMessage(text="Привіт! Відправ мені накладну зі штрихкодами.\nЩоб дізнатися свій ID, напиши: my_id")
+            TextMessage(text="Привіт! Відправ мені накладну зі штрихкодами.\nЩоб дізнатися свій ID, напиши: Айді")
         ])
         return Response(status=200)
 
@@ -166,7 +167,29 @@ def incoming():
         user_name = viber_request.sender.name
         text = getattr(message, 'text', '').strip().lower()
 
-        if text == "my_id":
+        # ==== Скарги: пересилаємо адміну оригінальне повідомлення ====
+        error_keywords = ["помилка", "error", "bug", "не працює", "fail"]
+        if text in error_keywords or any(kw in text for kw in error_keywords):
+            try:
+                viber.send_messages(ADMIN_ID, [
+                    TextMessage(text=f"⚠️ Скарга від {user_name} ({user_id}): {text}")
+                ])
+                # Якщо це reply — пересилаємо повідомлення, на яке відповіли
+                if getattr(message, "reply_to", None):
+                    original_message = message.reply_to
+                    if hasattr(original_message, "text"):
+                        viber.send_messages(ADMIN_ID, [
+                            TextMessage(text=f"📩 Оригінал: {original_message.text}")
+                        ])
+                    elif hasattr(original_message, "media"):
+                        viber.send_messages(ADMIN_ID, [
+                            PictureMessage(media=original_message.media, text="📩 Оригінал (фото)")
+                        ])
+            except Exception as e:
+                print(f"Помилка при відправці адміну: {e}")
+
+        # Команда Айді
+        if text == "айді":
             viber.send_messages(user_id, [TextMessage(text=f"Ваш user_id: {user_id}")])
             return Response(status=200)
 
