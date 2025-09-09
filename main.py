@@ -123,19 +123,32 @@ def get_barcodes_from_sheet(sheet_id, sheet_name):
 def delayed_send_barcodes(user_id, file_base_name, file_name, public_url):
     time.sleep(80)
 
-    # Надсилаємо фото з кнопкою "Помилка" (новий синтаксис)
+    # 1. Фото
+    try:
+        viber.send_messages(user_id, [
+            PictureMessage(
+                media=public_url,
+                text=f"Фото: {file_name}"
+            )
+        ])
+    except Exception as e:
+        print(f"Помилка при надсиланні фото: {e}")
+
+    # 2. Кнопка "Помилка"
     try:
         rich_media_dict = {
+            "Type": "rich_media",
             "ButtonsGroupColumns": 6,
             "ButtonsGroupRows": 1,
+            "BgColor": "#FFFFFF",
             "Buttons": [
                 {
+                    "Columns": 6,
+                    "Rows": 1,
                     "ActionType": "reply",
                     "ActionBody": "error_report",
                     "Text": "Помилка",
-                    "BgColor": "#e6e6e6",
-                    "Columns": 6,
-                    "Rows": 1
+                    "BgColor": "#e6e6e6"
                 }
             ]
         }
@@ -143,14 +156,13 @@ def delayed_send_barcodes(user_id, file_base_name, file_name, public_url):
             RichMediaMessage(
                 rich_media=rich_media_dict,
                 min_api_version=2,
-                alt_text=f"Фото: {file_name}",
-                thumbnail=public_url
+                alt_text="Кнопка 'Помилка'"
             )
         ])
     except Exception as e:
-        print(f"Помилка при надсиланні фото з кнопкою: {e}")
+        print(f"Помилка при надсиланні кнопки: {e}")
 
-    # Надсилаємо тільки штрихкоди (без заголовку)
+    # 3. Штрихкоди
     sheet_name = find_sheet_name(SPREADSHEET_ID, file_base_name)
     if not sheet_name:
         barcodes_text = f"❌ Не знайдено листа з назвою '{file_base_name}'"
