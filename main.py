@@ -34,7 +34,7 @@ app = Flask(__name__)
 viber = Api(BotConfiguration(
     name='Джексон',
     avatar='https://www.flaticon.com/ru/free-icon/bot_4711994?term=%D0%B1%D0%BE%D1%82&page=1&position=13&origin=tag&related_id=4711994',
-    auth_token=VIBER_TOKEN
+    auth_token=VIBER_TOKEN,
     api_version=2
 ))
 
