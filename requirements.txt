@@ -5,7 +5,8 @@ google-auth==2.23.0
 google-auth-httplib2==0.1.0
 google-cloud-vision==3.11.0
 viberbot==1.0.12
-
+pyzbar
+Pillow
 
 git+https://github.com/Viber/viber-bot-python.git#egg=viberbot
 
