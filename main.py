@@ -38,7 +38,10 @@ viber = Api(BotConfiguration(
 ))
 
 # Google API
-creds = Credentials.from_authorized_user_file(GOOGLE_TOKEN_FILE, ['https://www.googleapis.com/auth/drive.file','https://www.googleapis.com/auth/spreadsheets'])
+creds = Credentials.from_authorized_user_file(GOOGLE_TOKEN_FILE, [
+    'https://www.googleapis.com/auth/drive.file',
+    'https://www.googleapis.com/auth/spreadsheets'
+])
 drive_service = build('drive', 'v3', credentials=creds)
 sheets_service = build('sheets', 'v4', credentials=creds)
 
@@ -106,7 +109,11 @@ def extract_barcodes_from_image(img_bytes):
 def filter_barcodes(text):
     clean_text = text.replace("O","0").replace("I","1").replace("L","1")
     raw_matches = re.findall(r"\d{8,20}", clean_text)
-    forbidden_prefixes = ["00","1","436","202","22","403","675","459","311","377","391","2105","451","288","240","442","044","363","971","097","044","44","536","053","82","066","66","29","36","46","38","43","26","39","35","53","30","67","063","63","0674","674","0675","675","319","086","86","095","9508","11","21","050","507","6721","06721","2309","999","249","9798"]
+    forbidden_prefixes = ["00","1","436","202","22","403","675","459","311","377","391","2105","451",
+                          "288","240","442","044","363","971","097","044","44","536","053","82","066",
+                          "66","29","36","46","38","43","26","39","35","53","30","67","063","63","0674",
+                          "674","0675","675","319","086","86","095","9508","11","21","050","507","6721",
+                          "06721","2309","999","249","9798"]
     filtered=[]
     for code in raw_matches:
         if code in filtered: continue
@@ -125,7 +132,7 @@ def is_valid_ean(code):
     else: return False
     return (10-(s%10))%10==digits[-1]
 
-# ==== Черга ====
+# ==== Обробка черги ====
 def process_queue_worker():
     while True:
         user_id,file_bytes,file_name = task_queue.get()
@@ -136,7 +143,11 @@ def process_queue_worker():
         # Завантаження на Google Drive
         try:
             gfile = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype=f'image/{file_ext}')
-            f = drive_service.files().create(body={'name':f"{file_base}.{file_ext}",'parents':[GDRIVE_FOLDER_ID]}, media_body=gfile, fields='id').execute()
+            f = drive_service.files().create(
+                body={'name':f"{file_base}.{file_ext}",'parents':[GDRIVE_FOLDER_ID]},
+                media_body=gfile,
+                fields='id'
+            ).execute()
             file_id=f['id']
             add_public_permission(file_id)
             public_url=f"https://drive.google.com/uc?id={file_id}"
@@ -161,26 +172,23 @@ def process_queue_worker():
         except Exception as e:
             print(f"Sheet error: {e}")
 
-        # Надіслати фото
+        # Надіслати фото та штрихкоди
         try:
             viber.send_messages(user_id,[PictureMessage(media=public_url,text=file_name)])
             pending_reports[file_base]=public_url
-        except:
-            pass
+            text_msg="\n".join(barcodes) if barcodes else "❌ Штрихкодів не знайдено"
+            viber.send_messages(user_id,[TextMessage(text=text_msg)])
+        except: pass
 
         # Кнопка скарги
         try:
             rm={
                 "Type":"rich_media","ButtonsGroupColumns":6,"ButtonsGroupRows":1,"BgColor":"#FFFFFF",
-                "Buttons":[{"Columns":6,"Rows":1,"ActionType":"reply","ActionBody":f"report_{file_base}","Text":"⚠️ Скарга","TextSize":"medium","TextVAlign":"middle","TextHAlign":"center","BgColor":"#ff6666","TextOpacity":100,"TextColor":"#FFFFFF"}]
+                "Buttons":[{"Columns":6,"Rows":1,"ActionType":"reply","ActionBody":f"report_{file_base}",
+                            "Text":"⚠️ Скарга","TextSize":"medium","TextVAlign":"middle",
+                            "TextHAlign":"center","BgColor":"#ff6666","TextOpacity":100,"TextColor":"#FFFFFF"}]
             }
             viber.send_messages(user_id,[RichMediaMessage(rich_media=rm)])
-        except: pass
-
-        # Надіслати штрихкоди
-        try:
-            text_msg="\n".join(barcodes) if barcodes else "❌ Штрихкодів не знайдено"
-            viber.send_messages(user_id,[TextMessage(text=text_msg)])
         except: pass
 
         task_queue.task_done()
@@ -262,12 +270,10 @@ def incoming():
 def ping():
     return "OK",200
 
-# ==== Старт воркерів ====
-if "--worker" in sys.argv:
-    print("[WORKER] Queue worker started")
-    threading.Thread(target=process_queue_worker,daemon=True).start()
-    threading.Thread(target=delete_old_sheets_worker,daemon=True).start()
-    while True: time.sleep(60)
-else:
+# ==== Старт воркерів разом із Flask ====
+threading.Thread(target=process_queue_worker,daemon=True).start()
+threading.Thread(target=delete_old_sheets_worker,daemon=True).start()
+
+if __name__ == "__main__":
     port=int(os.environ.get("PORT",5000))
     app.run(host='0.0.0.0',port=port)
