@@ -17,8 +17,10 @@ from viberbot.api.viber_requests import ViberMessageRequest, ViberConversationSt
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
-from PIL import Image, ImageEnhance
+from PIL import Image
 import pytesseract
+import cv2
+import numpy as np
 
 # ==== Google API авторизація через OAuth ====
 GOOGLE_USER_KEY = json.loads(os.environ['GOOGLE_SA_JSON'])
@@ -87,17 +89,26 @@ def add_public_permission(file_id):
     except Exception as e:
         print(f"Помилка при додаванні доступу: {e}")
 
-# ==== OCR (Tesseract) ====
+# ==== OCR (Tesseract + OpenCV) ====
 def extract_barcodes_from_image(file_stream):
     try:
         file_stream.seek(0)
-        img = Image.open(file_stream).convert('L')  # grayscale
-        enhancer = ImageEnhance.Contrast(img)
-        img = enhancer.enhance(2.0)
-        text = pytesseract.image_to_string(img, config='--psm 6 digits')
+        file_bytes = np.asarray(bytearray(file_stream.read()), dtype=np.uint8)
+        img = cv2.imdecode(file_bytes, cv2.IMREAD_GRAYSCALE)
+
+        # Підвищуємо контраст
+        img = cv2.equalizeHist(img)
+
+        # Бінаризація
+        _, img = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+        # Конвертуємо в PIL для pytesseract
+        img_pil = Image.fromarray(img)
+
+        # OCR тільки цифри
+        text = pytesseract.image_to_string(img_pil, config='--psm 6 -c tessedit_char_whitelist=0123456789')
         raw_matches = [s for s in text.split() if s.isdigit() and 8 <= len(s) <= 18]
 
-        # фільтруємо небажані префікси
         forbidden_prefixes = ["00","1","436","202","22","403","675","459","311","377","391","2105",
                               "451","288","240","442","044","363","971","097","044","44","536","053",
                               "82","066","66","29","36","46","38","43","26","39","35","53","30",
