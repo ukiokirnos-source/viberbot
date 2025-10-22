@@ -1,6 +1,5 @@
 import os
 import io
-import sys
 import time
 import datetime
 import re
@@ -47,18 +46,28 @@ creds = Credentials.from_authorized_user_file(
 drive_service = build('drive', 'v3', credentials=creds)
 sheets_service = build('sheets', 'v4', credentials=creds)
 
-# ==== Queue & variables ====
+# ==== Queue & Variables ====
 task_queue = Queue()
 props = {}
 pending_reports = {}
 processed_message_tokens = set()
 
-# ==== Google Sheets functions ====
+# ==== Safe Google API execute ====
+def safe_execute(request, retries=3, delay=1):
+    for i in range(retries):
+        try:
+            return request.execute()
+        except Exception as e:
+            print(f"[Google API] retry {i+1}/{retries} due to {e}")
+            time.sleep(delay)
+    raise Exception("[Google API] failed after retries")
+
+# ==== Google Sheets Helpers ====
 def get_all_users():
-    result = sheets_service.spreadsheets().values().get(
+    result = safe_execute(sheets_service.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID,
         range="Лист1!A:D"
-    ).execute()
+    ))
     return result.get('values', [])
 
 def find_user_row(user_id):
@@ -69,23 +78,23 @@ def find_user_row(user_id):
     return None, None
 
 def add_new_user(user_id, name):
-    sheets_service.spreadsheets().values().append(
+    safe_execute(sheets_service.spreadsheets().values().append(
         spreadsheetId=SPREADSHEET_ID,
         range="Лист1!A:D",
         valueInputOption="RAW",
         insertDataOption="INSERT_ROWS",
         body={"values": [[user_id, name, DAILY_LIMIT_DEFAULT, 0]]}
-    ).execute()
+    ))
 
 def update_user_counter(row_number, new_count):
-    sheets_service.spreadsheets().values().update(
+    safe_execute(sheets_service.spreadsheets().values().update(
         spreadsheetId=SPREADSHEET_ID,
         range=f"Лист1!D{row_number}",
         valueInputOption="RAW",
         body={"values": [[new_count]]}
-    ).execute()
+    ))
 
-# ==== Google Drive ====
+# ==== Google Drive Helpers ====
 def add_public_permission(file_id):
     try:
         drive_service.permissions().create(fileId=file_id, body={'type':'anyone','role':'reader'}).execute()
@@ -127,7 +136,7 @@ def is_valid_ean(code):
     else: return False
     return (10-(s%10))%10==digits[-1]
 
-# ==== Queue worker ====
+# ==== Queue Worker ====
 def process_queue_worker():
     while True:
         user_id,file_bytes,file_name = task_queue.get()
@@ -135,46 +144,40 @@ def process_queue_worker():
         file_base = f"photo_{timestamp}"
         file_ext = file_name.split('.')[-1]
 
-        print(f"[WORKER] Processing {file_name}")
-
         # Save locally for debug
-        try:
-            os.makedirs("/tmp/photos", exist_ok=True)
-            with open(f"/tmp/photos/{file_name}", "wb") as f_local:
-                f_local.write(file_bytes)
-        except Exception as e:
-            print(f"[WORKER] Local save error: {e}")
+        local_path = f"/tmp/{file_base}.{file_ext}"
+        with open(local_path, "wb") as f_local:
+            f_local.write(file_bytes)
 
         # Upload to Drive
         try:
             gfile = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype=f'image/{file_ext}')
-            f = drive_service.files().create(
+            f = safe_execute(drive_service.files().create(
                 body={'name':f"{file_base}.{file_ext}",'parents':[GDRIVE_FOLDER_ID]},
                 media_body=gfile,
                 fields='id'
-            ).execute()
+            ))
             file_id=f['id']
             add_public_permission(file_id)
             public_url=f"https://drive.google.com/uc?id={file_id}"
-            print(f"[WORKER] Drive upload done: {public_url}")
         except Exception as e:
+            print(f"[Queue] Drive upload error: {e}")
             viber.send_messages(user_id,[TextMessage(text=f"❌ Drive upload error: {e}")])
             task_queue.task_done()
             continue
 
         # Extract barcodes
         barcodes = extract_barcodes_from_image(file_bytes)
-        print(f"[WORKER] Barcodes: {barcodes}")
 
         # Google Sheets
         try:
             values=[[b] for b in barcodes] if barcodes else [["Штрихкодів не знайдено"]]
-            sheets_service.spreadsheets().values().update(
+            safe_execute(sheets_service.spreadsheets().values().update(
                 spreadsheetId=SPREADSHEET_ID,
                 range=f"{file_base}!A1",
                 valueInputOption="RAW",
                 body={"values":values}
-            ).execute()
+            ))
             props[file_base]=time.time()*1000
         except Exception as e:
             print(f"[Sheets] error: {e}")
@@ -186,14 +189,15 @@ def process_queue_worker():
             viber.send_messages(user_id,[TextMessage(text=text_msg)])
             pending_reports[file_base]=public_url
         except Exception as e:
-            print(f"[WORKER] Viber send error: {e}")
+            print(f"[Viber] send error: {e}")
 
         # Send complaint button
         try:
             rm={"Type":"rich_media","ButtonsGroupColumns":6,"ButtonsGroupRows":1,"BgColor":"#FFFFFF",
                 "Buttons":[{"Columns":6,"Rows":1,"ActionType":"reply","ActionBody":f"report_{file_base}","Text":"⚠️ Скарга","TextSize":"medium","TextVAlign":"middle","TextHAlign":"center","BgColor":"#ff6666","TextOpacity":100,"TextColor":"#FFFFFF"}]}
             viber.send_messages(user_id,[RichMediaMessage(rich_media=rm)])
-        except: pass
+        except Exception as e:
+            print(f"[Viber] complaint button error: {e}")
 
         task_queue.task_done()
 
@@ -201,7 +205,7 @@ def process_queue_worker():
 def delete_old_sheets_worker():
     while True:
         try:
-            ss = sheets_service.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
+            ss = safe_execute(sheets_service.spreadsheets().get(spreadsheetId=SPREADSHEET_ID))
             sheets = ss.get('sheets',[])
             now = time.time()*1000
             for sheet in sheets:
@@ -209,13 +213,15 @@ def delete_old_sheets_worker():
                 created=props.get(name)
                 if created and now-created>=DELETE_SHEET_INTERVAL*1000:
                     try:
-                        sheets_service.spreadsheets().batchUpdate(
+                        safe_execute(sheets_service.spreadsheets().batchUpdate(
                             spreadsheetId=SPREADSHEET_ID,
                             body={"requests":[{"deleteSheet":{"sheetId":sheet['properties']['sheetId']}}]}
-                        ).execute()
+                        ))
                         props.pop(name)
-                    except: pass
-        except: pass
+                    except Exception as e:
+                        print(f"[Sheets delete] error: {e}")
+        except Exception as e:
+            print(f"[Sheets list] error: {e}")
         time.sleep(60)
 
 # ==== Flask routes ====
@@ -267,7 +273,6 @@ def incoming():
             file_name=f"{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
             update_user_counter(row_num,uploaded_today+1)
             viber.send_messages(user_id,[TextMessage(text=f"📥 Фото '{file_name}' отримано. Оброблюю...")])
-            print(f"[QUEUE] Task added for {file_name}")
             task_queue.put((user_id,img_data,file_name))
 
     return Response(status=200)
@@ -277,12 +282,11 @@ def ping():
     return "OK",200
 
 # ==== Start workers & Flask ====
-if __name__ == "__main__":
-    # Запуск воркерів у потоках
-    threading.Thread(target=process_queue_worker, daemon=True).start()
-    threading.Thread(target=delete_old_sheets_worker, daemon=True).start()
+def start_workers():
+    threading.Thread(target=process_queue_worker,daemon=True).start()
+    threading.Thread(target=delete_old_sheets_worker,daemon=True).start()
 
-    # Flask слухає порт
-    port = int(os.environ.get("PORT", 5000))
-    print(f"[INFO] Starting Flask on port {port}")
+if __name__ == "__main__":
+    start_workers()
+    port=int(os.environ.get("PORT",5000))
     app.run(host='0.0.0.0', port=port)
