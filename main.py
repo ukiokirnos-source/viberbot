@@ -17,13 +17,14 @@ from googleapiclient.http import MediaIoBaseUpload
 # ==== Налаштування ====
 VIBER_TOKEN = "4fdbb2493ae7ddc2-cd8869c327e2c592-60fd2dddaa295531"
 GDRIVE_FOLDER_ID = "1FteobWxkEUxPq1kBhUiP70a4-X0slbWe"
+SPREADSHEET_ID = "1W_fiI8FiwDn0sKq0ks7rGcWhXB0HEcHxar1uK4GL1P8"
 GOOGLE_TOKEN_FILE = "token.json"
 SCOPES = [
     'https://www.googleapis.com/auth/drive.file',
     'https://www.googleapis.com/auth/spreadsheets'
 ]
 ADMIN_ID = "uJBIST3PYaJLoflfY/9zkQ=="
-SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzY1dpIw-6jqNVX3jvx9KRwgVeiEqqLtRmvp5aOtfJJlikAHY6v-AAsyRiNEcbTU1aqAQ/exec"
+SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw3qol9XKHcuR8Z0r72bqfnr60S0dL1IeNSqqsa49YqYujuH00MYK1qEvqEIP-ALF4bnw/exec"
 
 app = Flask(__name__)
 
@@ -38,6 +39,7 @@ viber = Api(BotConfiguration(
 print("[INIT] Ініціалізація Google API...")
 creds = Credentials.from_authorized_user_file(GOOGLE_TOKEN_FILE, SCOPES)
 drive_service = build('drive', 'v3', credentials=creds)
+sheets_service = build('sheets', 'v4', credentials=creds)
 print("[INIT] Google API готовий")
 
 processed_message_tokens = set()
@@ -54,10 +56,11 @@ def add_public_permission(file_id):
         traceback.print_exc()
 
 # ==== Apps Script обробка ====
-def process_barcodes(file_id):
+def process_barcodes(public_url):
+    """Викликає Apps Script для обробки зображення та отримання штрихкодів"""
     try:
-        print(f"[SCRIPT] Викликаю Apps Script для файлу {file_id}")
-        resp = requests.post(SCRIPT_URL, json={"fileId": file_id}, timeout=40)
+        print(f"[SCRIPT] Викликаю Apps Script для URL {public_url}")
+        resp = requests.post(SCRIPT_URL, json={"imageUrl": public_url}, timeout=40)
         print(f"[SCRIPT] Статус відповіді: {resp.status_code}")
         print(f"[SCRIPT] Тіло відповіді: {resp.text}")
         data = resp.json()
@@ -73,19 +76,10 @@ def process_barcodes(file_id):
         return [f"❌ Помилка при запиті до Apps Script: {e}"]
 
 # ==== Відправка штрихкодів ====
-def delayed_send(user_id, file_id, file_name, public_url):
-    try:
-        print(f"[SEND] Відправляю фото користувачу {user_id}")
-        viber.send_messages(user_id, [
-            PictureMessage(media=public_url, text=f"Фото: {file_name}")
-        ])
-    except Exception as e:
-        print(f"[ERROR] Помилка при надсиланні фото: {e}")
-        traceback.print_exc()
-
+def delayed_send(user_id, file_name, public_url):
     try:
         print(f"[SEND] Викликаю Apps Script для {file_name}")
-        barcodes = process_barcodes(file_id)
+        barcodes = process_barcodes(public_url)
         barcodes_text = "\n".join(barcodes)
         viber.send_messages(user_id, [
             TextMessage(text=barcodes_text)
@@ -136,6 +130,7 @@ def incoming():
         traceback.print_exc()
         return Response(status=500)
 
+    # При старті
     if isinstance(viber_request, ViberConversationStartedRequest):
         print(f"[VIBER] Новий користувач: {viber_request.user.id}")
         viber.send_messages(viber_request.user.id, [
@@ -150,6 +145,7 @@ def incoming():
 
         text = getattr(message, 'text', '').strip().lower()
 
+        # Скарга
         if text.startswith("report_"):
             file_name = text.replace("report_", "")
             print(f"[REPORT] Отримано скаргу на {file_name}")
@@ -164,6 +160,7 @@ def incoming():
                 print("[REPORT] Фото не знайдено серед pending_reports.")
             return Response(status=200)
 
+        # Фото
         if hasattr(message, 'media') and message.media:
             try:
                 image_url = message.media
@@ -188,11 +185,27 @@ def incoming():
                 add_public_permission(file_id)
 
                 public_url = f"https://drive.google.com/uc?id={file_id}"
+
+                # Надсилаємо підтвердження користувачу
                 viber.send_messages(user_id, [
+                    PictureMessage(media=public_url, text=f"Фото: {file_name}"),
                     TextMessage(text=f"📥 Фото '{file_name}' отримано, оброблюю...")
                 ])
 
-                threading.Thread(target=delayed_send, args=(user_id, file_id, file_name, public_url), daemon=True).start()
+                # === Додано: активація Apps Script + пауза 5 сек ===
+                def trigger_script_then_continue():
+                    try:
+                        print(f"[SCRIPT] Активую скрипт для {file_name}")
+                        _ = process_barcodes(public_url)  # просто активуємо
+                        import time
+                        time.sleep(5)
+                        print("[SCRIPT] Продовжую виконання після паузи")
+                        delayed_send(user_id, file_name, public_url)
+                    except Exception as e:
+                        print(f"[ERROR] Помилка під час активації скрипта: {e}")
+                        traceback.print_exc()
+
+                threading.Thread(target=trigger_script_then_continue, daemon=True).start()
 
             except Exception as e:
                 print(f"[ERROR] Помилка при обробці фото: {e}")
@@ -200,6 +213,7 @@ def incoming():
                 viber.send_messages(user_id, [TextMessage(text=f"❌ Помилка при обробці: {e}")])
 
     return Response(status=200)
+
 
 @app.route('/', methods=['GET'])
 def ping():
