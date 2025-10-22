@@ -18,6 +18,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 from google.cloud import vision
+from PIL import Image, ImageEnhance
 
 # ==== Google API авторизація через OAuth ====
 GOOGLE_USER_KEY = json.loads(os.environ['GOOGLE_SA_JSON'])
@@ -91,16 +92,25 @@ def add_public_permission(file_id):
 def extract_barcodes_from_image(file_stream):
     try:
         file_stream.seek(0)
-        content = file_stream.read()
+        # Робимо ч/б та підсилюємо контраст
+        img = Image.open(file_stream).convert('L')  # grayscale
+        enhancer = ImageEnhance.Contrast(img)
+        img = enhancer.enhance(2.0)  # контраст 2x
+        buf = io.BytesIO()
+        img.save(buf, format='JPEG')
+        content = buf.getvalue()
+
         image = vision.Image(content=content)
         response = vision_client.text_detection(image=image)
         texts = response.text_annotations
         if not texts:
             return []
 
+        # Беремо весь текст і шукаємо числа довжиною 8-18
         text = texts[0].description.replace("O", "0").replace("I", "1").replace("L", "1")
         raw_matches = [s for s in text.split() if s.isdigit() and 8 <= len(s) <= 18]
 
+        # Фільтруємо небажані префікси
         forbidden_prefixes = [
             "00", "1", "436", "202", "22", "403", "675", "459", "311", "377", "391", "2105",
             "451", "288", "240", "442", "044", "363", "971", "097", "044", "44", "536", "053",
@@ -111,9 +121,8 @@ def extract_barcodes_from_image(file_stream):
 
         filtered = []
         for code in raw_matches:
-            if any(code.startswith(p) for p in forbidden_prefixes):
-                continue
-            filtered.append(code)
+            if not any(code.startswith(p) for p in forbidden_prefixes):
+                filtered.append(code)
 
         return list(set(filtered))
     except Exception as e:
