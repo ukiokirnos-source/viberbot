@@ -76,18 +76,47 @@ def process_barcodes(public_url):
         return [f"❌ Помилка при запиті до Apps Script: {e}"]
 
 # ==== Відправка штрихкодів ====
-def delayed_send(user_id, file_name, public_url):
+ddef delayed_send(user_id, file_name, public_url):
     try:
-        print(f"[SEND] Викликаю Apps Script для {file_name}")
-        barcodes = process_barcodes(public_url)
-        barcodes_text = "\n".join(barcodes)
-        viber.send_messages(user_id, [
-            TextMessage(text=barcodes_text)
-        ])
-    except Exception as e:
-        print(f"[ERROR] Помилка при надсиланні штрихкодів: {e}")
-        traceback.print_exc()
+        import time
+        print(f"[SEND] Активую Apps Script для {file_name}")
+        _ = process_barcodes(public_url)
 
+        # чекаємо, поки Apps Script створить лист у таблиці
+        print("[WAIT] Очікую 10 секунд перед читанням таблиці...")
+        time.sleep(10)
+
+        # назва листа — це назва файлу без розширення
+        sheet_name = file_name.replace(f".{file_name.split('.')[-1]}", "")
+        print(f"[SHEETS] Пробую зчитати лист '{sheet_name}'")
+
+        # читаємо дані з таблиці
+        result = sheets_service.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f"'{sheet_name}'!A:A"
+        ).execute()
+
+        values = result.get("values", [])
+        if not values:
+            print(f"[SHEETS] Лист {sheet_name} пустий або не знайдено")
+            viber.send_messages(user_id, [TextMessage(text="❌ Штрихкодів не знайдено.")])
+            return
+
+        # збираємо штрихкоди в текст
+        barcodes = [row[0] for row in values if row]
+        barcodes_text = "\n".join(barcodes)
+        print(f"[OK] Знайдено {len(barcodes)} штрихкодів.")
+
+        viber.send_messages(user_id, [
+            TextMessage(text=f"✅ Знайдено {len(barcodes)} штрихкодів:\n{barcodes_text}")
+        ])
+
+    except Exception as e:
+        print(f"[ERROR] Помилка при отриманні штрихкодів: {e}")
+        traceback.print_exc()
+        viber.send_messages(user_id, [TextMessage(text=f"❌ Помилка при отриманні штрихкодів: {e}")])
+
+    # кнопка скарги
     try:
         print(f"[SEND] Додаю кнопку скарги для {file_name}")
         rich_media = {
@@ -118,6 +147,7 @@ def delayed_send(user_id, file_name, public_url):
     except Exception as e:
         print(f"[ERROR] Помилка при створенні кнопки: {e}")
         traceback.print_exc()
+
 
 # ==== Основна логіка ====
 @app.route('/', methods=['POST'])
