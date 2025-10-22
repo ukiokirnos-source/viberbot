@@ -4,8 +4,6 @@ import time
 import requests
 import datetime
 import re
-import json
-import base64
 from queue import Queue
 from flask import Flask, request, Response
 
@@ -30,16 +28,19 @@ SCOPES = [
     'https://www.googleapis.com/auth/drive.file',
     'https://www.googleapis.com/auth/spreadsheets'
 ]
-DAILY_LIMIT_DEFAULT = 12
+DAILY_LIMIT_DEFAULT = 8
 ADMIN_ID = "uJBIST3PYaJLoflfY/9zkQ=="
 DELETE_SHEET_INTERVAL = 180  # секунд (3 хв)
 
+# ==== Flask і Viber ====
 app = Flask(__name__)
 viber = Api(BotConfiguration(
     name='Джексон🤖',
     avatar='https://raw.githubusercontent.com/ukiokirnos-source/viberbot/bea72a7878267cc513cdd87669f9eb6ee0faca50/free-icon-bot-4712106.png',
     auth_token=VIBER_TOKEN
 ))
+
+# ==== Google API ====
 creds = Credentials.from_authorized_user_file(GOOGLE_TOKEN_FILE, SCOPES)
 drive_service = build('drive', 'v3', credentials=creds)
 sheets_service = build('sheets', 'v4', credentials=creds)
@@ -88,27 +89,26 @@ def add_public_permission(file_id):
         permission = {'type': 'anyone', 'role': 'reader'}
         drive_service.permissions().create(fileId=file_id, body=permission).execute()
     except Exception as e:
-        print(f"[DRIVE] Permission error: {e}")
+        print(f"[ERROR] Drive permission: {e}")
 
 # ==== Vision API ====
 def extract_barcodes_from_image(img_bytes):
+    import base64
+    base64_img = base64.b64encode(img_bytes).decode('utf-8')
+    payload = {
+        "requests": [{
+            "image": {"content": base64_img},
+            "features": [{"type": "TEXT_DETECTION"}]
+        }]
+    }
+    url = f"https://vision.googleapis.com/v1/images:annotate?key={VISION_API_KEY}"
     try:
-        base64_img = base64.b64encode(img_bytes).decode()
-        payload = {
-            "requests": [{
-                "image": {"content": base64_img},
-                "features": [{"type": "TEXT_DETECTION"}]
-            }]
-        }
-        url = f"https://vision.googleapis.com/v1/images:annotate?key={VISION_API_KEY}"
         resp = requests.post(url, json=payload)
-        resp.raise_for_status()
         resp_json = resp.json()
         text = resp_json['responses'][0].get('fullTextAnnotation', {}).get('text', '')
-        print(f"[VISION] Text detected: {text[:100]}...")
         return filter_barcodes(text)
     except Exception as e:
-        print(f"[VISION] API error: {e}")
+        print(f"[ERROR] Vision API: {e}")
         return []
 
 def filter_barcodes(text):
@@ -127,37 +127,34 @@ def filter_barcodes(text):
 def is_valid_ean(code):
     digits = [int(d) for d in code]
     if len(digits) == 13:
-        s = sum(d * (3 if i%2 else 1) for i,d in enumerate(digits[:-1]))
+        s = sum(d* (3 if i%2 else 1) for i,d in enumerate(digits[:-1]))
     elif len(digits) == 8:
-        s = sum(d * (1 if i%2 else 3) for i,d in enumerate(digits[:-1]))
+        s = sum(d* (1 if i%2 else 3) for i,d in enumerate(digits[:-1]))
     else:
         return False
-    checksum = (10 - (s %10)) %10
+    checksum = (10 - (s %10))%10
     return checksum == digits[-1]
 
 # ==== Видалення старих листів ====
 def delete_old_sheets_worker():
-    print("[WORKER] Delete old sheets started")
+    print("[WORKER] Delete sheets worker started")
     while True:
-        try:
-            ss = sheets_service.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
-            sheets = ss.get('sheets', [])
-            now = time.time() * 1000
-            for sheet in sheets:
-                name = sheet['properties']['title']
-                created = props.get(name)
-                if created and now - created >= DELETE_SHEET_INTERVAL*1000:
-                    try:
-                        sheets_service.spreadsheets().batchUpdate(
-                            spreadsheetId=SPREADSHEET_ID,
-                            body={"requests":[{"deleteSheet":{"sheetId":sheet['properties']['sheetId']}}]}
-                        ).execute()
-                        print(f"[SHEETS] Deleted old sheet: {name}")
-                        props.pop(name)
-                    except Exception as e:
-                        print(f"[SHEETS] Delete error: {e}")
-        except Exception as e:
-            print(f"[SHEETS] Fetch error: {e}")
+        ss = sheets_service.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
+        sheets = ss.get('sheets', [])
+        now = time.time()*1000
+        for sheet in sheets:
+            name = sheet['properties']['title']
+            created = props.get(name)
+            if created and now - created >= DELETE_SHEET_INTERVAL*1000:
+                try:
+                    sheets_service.spreadsheets().batchUpdate(
+                        spreadsheetId=SPREADSHEET_ID,
+                        body={"requests":[{"deleteSheet":{"sheetId":sheet['properties']['sheetId']}}]}
+                    ).execute()
+                    props.pop(name)
+                    print(f"[WORKER] Deleted old sheet {name}")
+                except Exception as e:
+                    print(f"[ERROR] Delete sheet: {e}")
         time.sleep(60)
 
 # ==== Черга обробки фото ====
@@ -165,51 +162,48 @@ def process_queue_worker():
     print("[WORKER] Queue worker started")
     while True:
         task = task_queue.get()
-        if task is None:
-            break
+        if task is None: break
         user_id, file_bytes, file_name = task
-        print(f"[QUEUE] Processing {file_name} from {user_id}")
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        file_base = f"photo_{timestamp}"
-        file_ext = file_name.split('.')[-1]
-        gfile = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype=f'image/{file_ext}')
+        print(f"[QUEUE] Processing {file_name}")
+
+        # --- Завантаження на Drive ---
         try:
-            file_metadata = {'name': f"{file_base}.{file_ext}", 'parents':[GDRIVE_FOLDER_ID]}
+            gfile = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype='image/jpeg')
+            file_metadata = {'name': file_name, 'parents':[GDRIVE_FOLDER_ID]}
             f = drive_service.files().create(body=file_metadata, media_body=gfile, fields='id').execute()
             file_id = f['id']
             add_public_permission(file_id)
             public_url = f"https://drive.google.com/uc?id={file_id}"
-            print(f"[DRIVE] Uploaded {file_name} -> {public_url}")
         except Exception as e:
-            print(f"[DRIVE] Upload error: {e}")
+            print(f"[ERROR] Drive upload: {e}")
             viber.send_messages(user_id,[TextMessage(text=f"❌ Drive upload error: {e}")])
             task_queue.task_done()
             continue
 
-        # Штрихкоди
+        # --- Vision API ---
         barcodes = extract_barcodes_from_image(file_bytes)
-        sheet_name = file_base
+        print(f"[QUEUE] Barcodes: {barcodes}")
+
+        # --- Google Sheets ---
         try:
             values = [[b] for b in barcodes] if barcodes else [["Штрихкодів не знайдено"]]
             sheets_service.spreadsheets().values().update(
                 spreadsheetId=SPREADSHEET_ID,
-                range=f"{sheet_name}!A1",
+                range=f"{file_name}!A1",
                 valueInputOption="RAW",
                 body={"values":values}
             ).execute()
-            props[sheet_name] = time.time()*1000
-            print(f"[SHEETS] Sheet {sheet_name} updated")
+            props[file_name] = time.time()*1000
         except Exception as e:
-            print(f"[SHEETS] Error: {e}")
+            print(f"[ERROR] Sheet update: {e}")
 
-        # Надсилаємо фото
+        # --- Надсилка користувачу ---
         try:
-            viber.send_messages(user_id, [PictureMessage(media=public_url, text=file_name)])
-            pending_reports[file_base] = public_url
+            viber.send_messages(user_id,[PictureMessage(media=public_url, text=file_name)])
+            pending_reports[file_name] = public_url
         except Exception as e:
-            print(f"[VIBER] Picture send error: {e}")
+            print(f"[ERROR] Viber send picture: {e}")
 
-        # Кнопка скарги
         try:
             rm = {
                 "Type": "rich_media",
@@ -217,23 +211,22 @@ def process_queue_worker():
                 "ButtonsGroupRows": 1,
                 "BgColor": "#FFFFFF",
                 "Buttons":[
-                    {"Columns":6,"Rows":1,"ActionType":"reply","ActionBody":f"report_{file_base}","Text":"⚠️ Скарга","TextSize":"medium","TextVAlign":"middle","TextHAlign":"center","BgColor":"#ff6666","TextOpacity":100,"TextColor":"#FFFFFF"}
+                    {"Columns":6,"Rows":1,"ActionType":"reply","ActionBody":f"report_{file_name}","Text":"⚠️ Скарга","TextSize":"medium","TextVAlign":"middle","TextHAlign":"center","BgColor":"#ff6666","TextOpacity":100,"TextColor":"#FFFFFF"}
                 ]
             }
             viber.send_messages(user_id,[RichMediaMessage(rich_media=rm)])
         except Exception as e:
-            print(f"[VIBER] RichMedia error: {e}")
+            print(f"[ERROR] Viber send button: {e}")
 
-        # Текст штрихкодів
         try:
             text_msg = "\n".join(barcodes) if barcodes else "❌ Штрихкодів не знайдено"
             viber.send_messages(user_id,[TextMessage(text=text_msg)])
         except Exception as e:
-            print(f"[VIBER] TextMessage error: {e}")
+            print(f"[ERROR] Viber send text: {e}")
 
         task_queue.task_done()
 
-# ==== Flask ====
+# ==== Flask Routes ====
 @app.route('/', methods=['POST'])
 def incoming():
     viber_request = viber.parse_request(request.get_data())
@@ -280,11 +273,7 @@ def incoming():
 
         # Фото
         if hasattr(message,'media') and message.media:
-            response = requests.get(message.media)
-            if response.status_code != 200:
-                viber.send_messages(user_id,[TextMessage(text="❌ Помилка завантаження фото з Viber")])
-                return Response(status=200)
-            img_data = response.content
+            img_data = requests.get(message.media).content
             file_name = f"{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
             update_user_counter(row_num, uploaded_today+1)
             viber.send_messages(user_id,[TextMessage(text=f"📥 Фото '{file_name}' отримано. Оброблюю...")])
@@ -297,9 +286,11 @@ def incoming():
 def ping():
     return "OK", 200
 
-# ==== Старт робітників ====
-threading.Thread(target=process_queue_worker).start()
-threading.Thread(target=delete_old_sheets_worker).start()
+# ==== Старт робітників без __main__ ====
+threading.Thread(target=process_queue_worker, daemon=True).start()
+threading.Thread(target=delete_old_sheets_worker, daemon=True).start()
+print("[INFO] Workers started")
 
+# ==== Запуск Flask (для локального тесту) ====
 if __name__=='__main__':
     app.run(host='0.0.0.0', port=5000)
