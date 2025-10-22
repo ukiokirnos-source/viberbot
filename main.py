@@ -1,3 +1,4 @@
+
 import os
 import io
 import threading
@@ -11,7 +12,7 @@ from viberbot import Api
 from viberbot.api.bot_configuration import BotConfiguration
 from viberbot.api.messages.text_message import TextMessage
 from viberbot.api.messages.picture_message import PictureMessage
-from viberbot.api.vmessages.rich_media_message import RichMediaMessage
+from viberbot.api.messages.rich_media_message import RichMediaMessage
 from viberbot.api.viber_requests import ViberMessageRequest, ViberConversationStartedRequest
 
 from google.oauth2.service_account import Credentials
@@ -118,6 +119,7 @@ def delayed_send(user_id, file_name, public_url, file_stream):
     time.sleep(10)
     try:
         viber.send_messages(user_id, [PictureMessage(media=public_url, text=f"Фото: {file_name}")])
+        file_stream.seek(0)
         barcodes = extract_barcodes_from_image(file_stream)
         if not barcodes:
             barcodes_text = f"❌ Штрихкодів у фото '{file_name}' не знайдено."
