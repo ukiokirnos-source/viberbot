@@ -57,24 +57,31 @@ def add_public_permission(file_id):
         print(f"[ERROR] Помилка при додаванні доступу: {e}")
         traceback.print_exc()
 
-# ==== Apps Script ====
+# ==== Apps Script + Google Sheet ====
 def process_barcodes(public_url):
     try:
         print(f"[SCRIPT] Викликаю Apps Script для URL {public_url}")
+        # Виклик скрипта, щоб записав штрихкоди в Google Sheet
         resp = requests.post(SCRIPT_URL, json={"imageUrl": public_url}, timeout=40)
         print(f"[SCRIPT] Статус відповіді: {resp.status_code}")
         print(f"[SCRIPT] Тіло відповіді: {resp.text}")
-        data = resp.json()
-        barcodes = data.get("barcodes", [])
-        if not barcodes:
-            print("[SCRIPT] Штрихкодів не знайдено.")
+
+        # Тепер зчитуємо штрихкоди з Google Sheet
+        sheet_range = 'Sheet1!A:A'  # колона з штрихкодами
+        result = sheets_service.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID, range=sheet_range
+        ).execute()
+        values = result.get('values', [])
+        if not values:
+            print("[SHEET] Штрихкодів не знайдено в таблиці.")
             return ["❌ Штрихкодів не знайдено."]
-        print(f"[SCRIPT] Отримано штрихкоди: {barcodes}")
+        barcodes = [row[0] for row in values if row]
+        print(f"[SHEET] Отримано штрихкоди з таблиці: {barcodes}")
         return barcodes
     except Exception as e:
-        print(f"[ERROR] Помилка при запиті до Apps Script: {e}")
+        print(f"[ERROR] Помилка при обробці штрихкодів: {e}")
         traceback.print_exc()
-        return [f"❌ Помилка при запиті до Apps Script: {e}"]
+        return [f"❌ Помилка при обробці штрихкодів: {e}"]
 
 # ==== Відправка штрихкодів ====
 def delayed_send(user_id, file_name, public_url):
