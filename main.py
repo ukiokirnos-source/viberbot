@@ -2,6 +2,7 @@ import io
 import threading
 import requests
 import datetime
+import time
 import traceback
 from flask import Flask, request, Response
 from viberbot import Api
@@ -43,6 +44,7 @@ sheets_service = build('sheets', 'v4', credentials=creds)
 print("[INIT] Google API готовий")
 
 processed_message_tokens = set()
+processed_images = set()
 pending_reports = {}
 
 # ==== Google Drive ====
@@ -57,7 +59,6 @@ def add_public_permission(file_id):
 
 # ==== Apps Script ====
 def process_barcodes(public_url):
-    """Викликає Apps Script для обробки зображення та отримання штрихкодів"""
     try:
         print(f"[SCRIPT] Викликаю Apps Script для URL {public_url}")
         resp = requests.post(SCRIPT_URL, json={"imageUrl": public_url}, timeout=40)
@@ -78,6 +79,7 @@ def process_barcodes(public_url):
 # ==== Відправка штрихкодів ====
 def delayed_send(user_id, file_name, public_url):
     try:
+        time.sleep(5)  # затримка перед отриманням штрихкодів
         barcodes = process_barcodes(public_url)
         barcodes_text = "\n".join(barcodes)
         viber.send_messages(user_id, [
@@ -142,7 +144,6 @@ def incoming():
         if token in processed_message_tokens:
             print(f"[SKIP] Повторне повідомлення token={token}")
             return Response(status=200)
-
         processed_message_tokens.add(token)
 
         text = getattr(message, 'text', '').strip().lower()
@@ -161,13 +162,13 @@ def incoming():
 
         # === Фото ===
         if hasattr(message, 'media') and message.media:
-            try:
-                image_url = message.media
-                if image_url in processed_message_tokens:
-                    print(f"[SKIP] Повторне фото {image_url}")
-                    return Response(status=200)
-                processed_message_tokens.add(image_url)
+            image_url = message.media
+            if image_url in processed_images:
+                print(f"[SKIP] Повторне фото {image_url}")
+                return Response(status=200)
+            processed_images.add(image_url)
 
+            try:
                 ext = image_url.split('.')[-1].split('?')[0]
                 if ext.lower() not in ['jpg', 'jpeg', 'png']:
                     ext = 'jpg'
@@ -188,23 +189,16 @@ def incoming():
                 add_public_permission(file_id)
                 public_url = f"https://drive.google.com/uc?id={file_id}"
 
-                # 🔹 коротке повідомлення
+                # коротке повідомлення
                 viber.send_messages(user_id, [
                     TextMessage(text=f"📸 Фото отримано: {file_name}")
                 ])
 
-                # окремий потік для обробки
-                def trigger_script_and_send():
-                    try:
-                        process_barcodes(public_url)
-                        import time
-                        time.sleep(5)
-                        delayed_send(user_id, file_name, public_url)
-                    except Exception as e:
-                        print(f"[ERROR] trigger_script_and_send: {e}")
-                        traceback.print_exc()
-
-                threading.Thread(target=trigger_script_and_send, daemon=True).start()
+                # фоновий потік
+                threading.Thread(
+                    target=lambda: delayed_send(user_id, file_name, public_url),
+                    daemon=True
+                ).start()
 
             except Exception as e:
                 print(f"[ERROR] Помилка при обробці фото: {e}")
