@@ -5,40 +5,34 @@ import time
 import datetime
 import requests
 import json
-
 from flask import Flask, request, Response
 
 from viberbot import Api
 from viberbot.api.bot_configuration import BotConfiguration
 from viberbot.api.messages.text_message import TextMessage
 from viberbot.api.messages.picture_message import PictureMessage
-from viberbot.api.messages.rich_media_message import RichMediaMessage
 from viberbot.api.viber_requests import ViberMessageRequest, ViberConversationStartedRequest
 
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
-
 from google.cloud import vision
 
-# ==== Секрети з ENV ====
-VIBER_TOKEN = os.environ['VIBER_TOKEN']
-GDRIVE_FOLDER_ID = os.environ['GDRIVE_FOLDER_ID']
-SPREADSHEET_ID = os.environ['SPREADSHEET_ID']
-ADMIN_ID = os.environ.get('ADMIN_ID', "")
-DAILY_LIMIT_DEFAULT = int(os.environ.get('DAILY_LIMIT_DEFAULT', 12))
+# ==== Завантаження ключів із середовища ====
+GOOGLE_SHEETS_DRIVE_KEY = json.loads(os.environ['GOOGLE_SA_JSON'])
+GOOGLE_VISION_KEY = json.loads(os.environ['GOOGLE_VISION_JSON'])
 
-# ==== Google API ключі з ENV ====
-TOKEN_JSON = os.environ['GOOGLE_SA_JSON']       # Sheets + Drive ключ
-VISION_JSON = os.environ['GOOGLE_VISION_JSON']  # Vision ключ
+# ==== Конфігурація ====
+VIBER_TOKEN = "4fdbb2493ae7ddc2-cd8869c327e2c592-60fd2dddaa295531"
+GDRIVE_FOLDER_ID = "1FteobWxkEUxPq1kBhUiP70a4-X0slbWe"
+SPREADSHEET_ID = "1W_fiI8FiwDn0sKq0ks7rGcWhXB0HEcHxar1uK4GL1P8"
+ADMIN_ID = "uJBIST3PYaJLoflfY/9zkQ=="
+DAILY_LIMIT_DEFAULT = 12
 
-creds_dict = json.loads(TOKEN_JSON)
-creds = Credentials.from_service_account_info(creds_dict)
+# ==== Google API авторизація ====
+creds = Credentials.from_service_account_info(GOOGLE_SHEETS_DRIVE_KEY)
+vision_client = vision.ImageAnnotatorClient.from_service_account_info(GOOGLE_VISION_KEY)
 
-vision_creds_dict = json.loads(VISION_JSON)
-vision_client = vision.ImageAnnotatorClient.from_service_account_info(vision_creds_dict)
-
-# ==== Google сервіс ====
 drive_service = build('drive', 'v3', credentials=creds)
 sheets_service = build('sheets', 'v4', credentials=creds)
 
@@ -54,7 +48,7 @@ viber = Api(BotConfiguration(
 
 processed_message_tokens = set()
 
-# ==== Робота з таблицею ====
+# ==== Google Sheets ====
 def get_all_users():
     result = sheets_service.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID,
@@ -101,21 +95,23 @@ def extract_barcodes_from_image(file_stream):
     texts = response.text_annotations
     if not texts:
         return []
-    text = texts[0].description.replace("O","0").replace("I","1").replace("L","1")
+    text = texts[0].description.replace("O", "0").replace("I", "1").replace("L", "1")
     raw_matches = [s for s in text.split() if s.isdigit() and 8 <= len(s) <= 18]
     filtered = []
-    forbidden_prefixes = ["00","1","436","202","22","403","675","459","311","377","391","2105",
-                          "451","288","240","442","044","363","971","097","044","44","536","053",
-                          "82","066","66","29","36","46","38","43","26","39","35","53","30",
-                          "67","063","63","0674","674","0675","675","319","086","86","095",
-                          "9508","11","21","050","507","6721","06721","2309","999","249","9798"]
+    forbidden_prefixes = [
+        "00", "1", "436", "202", "22", "403", "675", "459", "311", "377", "391", "2105",
+        "451", "288", "240", "442", "044", "363", "971", "097", "044", "44", "536", "053",
+        "82", "066", "66", "29", "36", "46", "38", "43", "26", "39", "35", "53", "30",
+        "67", "063", "63", "0674", "674", "0675", "675", "319", "086", "86", "095",
+        "9508", "11", "21", "050", "507", "6721", "06721", "2309", "999", "249", "9798"
+    ]
     for code in raw_matches:
         if any(code.startswith(p) for p in forbidden_prefixes):
             continue
         filtered.append(code)
     return list(set(filtered))
 
-# ==== Надсилання фото та штрихкодів ====
+# ==== Відправка фото ====
 def delayed_send(user_id, file_name, public_url, file_stream):
     time.sleep(10)
     try:
@@ -165,7 +161,7 @@ def incoming():
         if hasattr(message, 'media') and message.media:
             image_url = message.media
             ext = image_url.split('.')[-1].split('?')[0]
-            ext = ext if ext.lower() in ['jpg','jpeg','png'] else 'jpg'
+            ext = ext if ext.lower() in ['jpg', 'jpeg', 'png'] else 'jpg'
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             file_name = f"photo_{timestamp}.{ext}"
 
@@ -173,7 +169,7 @@ def incoming():
                 img_data = requests.get(image_url).content
                 file_stream = io.BytesIO(img_data)
                 media = MediaIoBaseUpload(file_stream, mimetype=f'image/{ext}')
-                file_metadata = {'name': file_name, 'parents':[GDRIVE_FOLDER_ID]}
+                file_metadata = {'name': file_name, 'parents': [GDRIVE_FOLDER_ID]}
                 file = drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
                 file_id = file.get('id')
                 add_public_permission(file_id)
@@ -181,7 +177,11 @@ def incoming():
 
                 viber.send_messages(user_id, [TextMessage(text=f"📥 Фото '{file_name}' отримано. Обробляю (10 сек)...")])
                 file_stream.seek(0)
-                threading.Thread(target=delayed_send, args=(user_id,file_name,f"https://drive.google.com/uc?id={file_id}",file_stream), daemon=True).start()
+                threading.Thread(
+                    target=delayed_send,
+                    args=(user_id, file_name, f"https://drive.google.com/uc?id={file_id}", file_stream),
+                    daemon=True
+                ).start()
             except Exception as e:
                 viber.send_messages(user_id, [TextMessage(text=f"❌ Помилка при обробці: {e}")])
     return Response(status=200)
@@ -191,4 +191,4 @@ def ping():
     return "OK", 200
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT',5000)))
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
