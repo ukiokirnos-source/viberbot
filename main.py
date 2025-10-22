@@ -17,8 +17,8 @@ from viberbot.api.viber_requests import ViberMessageRequest, ViberConversationSt
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
-from google.cloud import vision
 from PIL import Image, ImageEnhance
+import pytesseract
 
 # ==== Google API авторизація через OAuth ====
 GOOGLE_USER_KEY = json.loads(os.environ['GOOGLE_SA_JSON'])
@@ -27,7 +27,6 @@ GOOGLE_VISION_KEY = json.loads(os.environ['GOOGLE_VISION_JSON'])
 creds = Credentials.from_authorized_user_info(GOOGLE_USER_KEY)
 drive_service = build('drive', 'v3', credentials=creds)
 sheets_service = build('sheets', 'v4', credentials=creds)
-vision_client = vision.ImageAnnotatorClient.from_service_account_info(GOOGLE_VISION_KEY)
 
 # ==== Конфігурація ====
 VIBER_TOKEN = "4fdbb2493ae7ddc2-cd8869c327e2c592-60fd2dddaa295531"
@@ -88,45 +87,26 @@ def add_public_permission(file_id):
     except Exception as e:
         print(f"Помилка при додаванні доступу: {e}")
 
-# ==== Vision API ====
+# ==== OCR (Tesseract) ====
 def extract_barcodes_from_image(file_stream):
     try:
         file_stream.seek(0)
-        # Робимо ч/б та підсилюємо контраст
         img = Image.open(file_stream).convert('L')  # grayscale
         enhancer = ImageEnhance.Contrast(img)
-        img = enhancer.enhance(2.0)  # контраст 2x
-        buf = io.BytesIO()
-        img.save(buf, format='JPEG')
-        content = buf.getvalue()
-
-        image = vision.Image(content=content)
-        response = vision_client.text_detection(image=image)
-        texts = response.text_annotations
-        if not texts:
-            return []
-
-        # Беремо весь текст і шукаємо числа довжиною 8-18
-        text = texts[0].description.replace("O", "0").replace("I", "1").replace("L", "1")
+        img = enhancer.enhance(2.0)
+        text = pytesseract.image_to_string(img, config='--psm 6 digits')
         raw_matches = [s for s in text.split() if s.isdigit() and 8 <= len(s) <= 18]
 
-        # Фільтруємо небажані префікси
-        forbidden_prefixes = [
-            "00", "1", "436", "202", "22", "403", "675", "459", "311", "377", "391", "2105",
-            "451", "288", "240", "442", "044", "363", "971", "097", "044", "44", "536", "053",
-            "82", "066", "66", "29", "36", "46", "38", "43", "26", "39", "35", "53", "30",
-            "67", "063", "63", "0674", "674", "0675", "675", "319", "086", "86", "095",
-            "9508", "11", "21", "050", "507", "6721", "06721", "2309", "999", "249", "9798"
-        ]
-
-        filtered = []
-        for code in raw_matches:
-            if not any(code.startswith(p) for p in forbidden_prefixes):
-                filtered.append(code)
-
+        # фільтруємо небажані префікси
+        forbidden_prefixes = ["00","1","436","202","22","403","675","459","311","377","391","2105",
+                              "451","288","240","442","044","363","971","097","044","44","536","053",
+                              "82","066","66","29","36","46","38","43","26","39","35","53","30",
+                              "67","063","63","0674","674","0675","675","319","086","86","095",
+                              "9508","11","21","050","507","6721","06721","2309","999","249","9798"]
+        filtered = [code for code in raw_matches if not any(code.startswith(p) for p in forbidden_prefixes)]
         return list(set(filtered))
     except Exception as e:
-        print(f"Помилка при розпізнаванні штрихкодів: {e}")
+        print(f"Помилка OCR: {e}")
         return []
 
 # ==== Відправка фото ====
