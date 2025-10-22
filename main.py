@@ -23,7 +23,7 @@ VIBER_TOKEN = "4fdbb2493ae7ddc2-cd8869c327e2c592-60fd2dddaa295531"
 GDRIVE_FOLDER_ID = "1FteobWxkEUxPq1kBhUiP70a4-X0slbWe"
 SPREADSHEET_ID = "1W_fiI8FiwDn0sKq0ks7rGcWhXB0HEcHxar1uK4GL1P8"
 GOOGLE_TOKEN_FILE = "token.json"
-VISION_API_KEY = "AIzaSyCs1YmkXLNtEc8mfFW7kWt3VNH881Y3mXA"
+VISION_API_KEY = "AIzaSyD1DYOb665j5M1u4EWTbPx461TKDqhi3UI"
 SCOPES = [
     'https://www.googleapis.com/auth/drive.file',
     'https://www.googleapis.com/auth/spreadsheets'
