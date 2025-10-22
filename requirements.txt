@@ -4,5 +4,8 @@ google-auth
 google-auth-oauthlib
 google-auth-httplib2
 google-api-python-client
+httplib2>=0.22.0
 requests
 git+https://github.com/Viber/viber-bot-python.git#egg=viberbot
+
+
