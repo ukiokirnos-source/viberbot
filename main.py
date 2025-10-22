@@ -47,13 +47,13 @@ creds = Credentials.from_authorized_user_file(
 drive_service = build('drive', 'v3', credentials=creds)
 sheets_service = build('sheets', 'v4', credentials=creds)
 
-# ==== Variables & Queue ====
+# ==== Queue & variables ====
 task_queue = Queue()
 props = {}
 pending_reports = {}
 processed_message_tokens = set()
 
-# ==== Google Sheets ====
+# ==== Google Sheets functions ====
 def get_all_users():
     result = sheets_service.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID,
@@ -135,17 +135,28 @@ def process_queue_worker():
         file_base = f"photo_{timestamp}"
         file_ext = file_name.split('.')[-1]
 
+        print(f"[WORKER] Processing {file_name}")
+
         # Save locally for debug
-        with open(f"/tmp/{file_base}.{file_ext}", "wb") as f_local:
-            f_local.write(file_bytes)
+        try:
+            os.makedirs("/tmp/photos", exist_ok=True)
+            with open(f"/tmp/photos/{file_name}", "wb") as f_local:
+                f_local.write(file_bytes)
+        except Exception as e:
+            print(f"[WORKER] Local save error: {e}")
 
         # Upload to Drive
         try:
             gfile = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype=f'image/{file_ext}')
-            f = drive_service.files().create(body={'name':f"{file_base}.{file_ext}",'parents':[GDRIVE_FOLDER_ID]}, media_body=gfile, fields='id').execute()
+            f = drive_service.files().create(
+                body={'name':f"{file_base}.{file_ext}",'parents':[GDRIVE_FOLDER_ID]},
+                media_body=gfile,
+                fields='id'
+            ).execute()
             file_id=f['id']
             add_public_permission(file_id)
             public_url=f"https://drive.google.com/uc?id={file_id}"
+            print(f"[WORKER] Drive upload done: {public_url}")
         except Exception as e:
             viber.send_messages(user_id,[TextMessage(text=f"❌ Drive upload error: {e}")])
             task_queue.task_done()
@@ -153,6 +164,7 @@ def process_queue_worker():
 
         # Extract barcodes
         barcodes = extract_barcodes_from_image(file_bytes)
+        print(f"[WORKER] Barcodes: {barcodes}")
 
         # Google Sheets
         try:
@@ -173,7 +185,8 @@ def process_queue_worker():
             text_msg="\n".join(barcodes) if barcodes else "❌ Штрихкодів не знайдено"
             viber.send_messages(user_id,[TextMessage(text=text_msg)])
             pending_reports[file_base]=public_url
-        except: pass
+        except Exception as e:
+            print(f"[WORKER] Viber send error: {e}")
 
         # Send complaint button
         try:
@@ -254,6 +267,7 @@ def incoming():
             file_name=f"{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
             update_user_counter(row_num,uploaded_today+1)
             viber.send_messages(user_id,[TextMessage(text=f"📥 Фото '{file_name}' отримано. Оброблюю...")])
+            print(f"[QUEUE] Task added for {file_name}")
             task_queue.put((user_id,img_data,file_name))
 
     return Response(status=200)
@@ -263,11 +277,12 @@ def ping():
     return "OK",200
 
 # ==== Start workers & Flask ====
-def start_workers():
-    threading.Thread(target=process_queue_worker,daemon=True).start()
-    threading.Thread(target=delete_old_sheets_worker,daemon=True).start()
-
 if __name__ == "__main__":
-    start_workers()
-    port=int(os.environ.get("PORT",5000))
+    # Запуск воркерів у потоках
+    threading.Thread(target=process_queue_worker, daemon=True).start()
+    threading.Thread(target=delete_old_sheets_worker, daemon=True).start()
+
+    # Flask слухає порт
+    port = int(os.environ.get("PORT", 5000))
+    print(f"[INFO] Starting Flask on port {port}")
     app.run(host='0.0.0.0', port=port)
