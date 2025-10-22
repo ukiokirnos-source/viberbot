@@ -24,6 +24,7 @@ SCOPES = [
     'https://www.googleapis.com/auth/drive.file',
     'https://www.googleapis.com/auth/spreadsheets'
 ]
+DAILY_LIMIT_DEFAULT = 12
 ADMIN_ID = "uJBIST3PYaJLoflfY/9zkQ=="
 SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw3qol9XKHcuR8Z0r72bqfnr60S0dL1IeNSqqsa49YqYujuH00MYK1qEvqEIP-ALF4bnw/exec"
 
@@ -37,65 +38,86 @@ viber = Api(BotConfiguration(
 ))
 
 # ==== Ініціалізація Google ====
-print("[INIT] Ініціалізація Google API...")
 creds = Credentials.from_authorized_user_file(GOOGLE_TOKEN_FILE, SCOPES)
 drive_service = build('drive', 'v3', credentials=creds)
 sheets_service = build('sheets', 'v4', credentials=creds)
-print("[INIT] Google API готовий")
 
 processed_message_tokens = set()
 processed_images = set()
 pending_reports = {}
 
+# ==== Google Sheet користувачі ====
+def get_all_users():
+    try:
+        result = sheets_service.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Лист1!A:D"
+        ).execute()
+        return result.get('values', [])
+    except:
+        return []
+
+def find_user_row(user_id):
+    rows = get_all_users()
+    for idx, row in enumerate(rows):
+        if len(row) > 0 and row[0] == user_id:
+            return idx + 1, row
+    return None, None
+
+def add_new_user(user_id, name):
+    sheets_service.spreadsheets().values().append(
+        spreadsheetId=SPREADSHEET_ID,
+        range="Лист1!A:D",
+        valueInputOption="RAW",
+        insertDataOption="INSERT_ROWS",
+        body={"values": [[user_id, name, DAILY_LIMIT_DEFAULT, 0]]}
+    ).execute()
+
+def update_user_counter(row_number, new_count):
+    sheets_service.spreadsheets().values().update(
+        spreadsheetId=SPREADSHEET_ID,
+        range=f"Лист1!D{row_number}",
+        valueInputOption="RAW",
+        body={"values": [[new_count]]}
+    ).execute()
+
 # ==== Google Drive ====
 def add_public_permission(file_id):
     try:
-        print(f"[DRIVE] Додаю публічний доступ до файлу {file_id}")
         permission = {'type': 'anyone', 'role': 'reader'}
         drive_service.permissions().create(fileId=file_id, body=permission).execute()
     except Exception as e:
         print(f"[ERROR] Помилка при додаванні доступу: {e}")
         traceback.print_exc()
 
-# ==== Apps Script + Google Sheet ====
-def process_barcodes(public_url):
+# ==== Обробка штрихкодів ====
+def process_barcodes(file_base_name):
     try:
-        print(f"[SCRIPT] Викликаю Apps Script для URL {public_url}")
-        # Виклик скрипта, щоб записав штрихкоди в Google Sheet
-        resp = requests.post(SCRIPT_URL, json={"imageUrl": public_url}, timeout=40)
-        print(f"[SCRIPT] Статус відповіді: {resp.status_code}")
-        print(f"[SCRIPT] Тіло відповіді: {resp.text}")
-
-        # Тепер зчитуємо штрихкоди з Google Sheet
-        sheet_range = 'Sheet1!A:A'  # колона з штрихкодами
+        sheet_range = f"'{file_base_name}'!A:A"
         result = sheets_service.spreadsheets().values().get(
             spreadsheetId=SPREADSHEET_ID, range=sheet_range
         ).execute()
         values = result.get('values', [])
         if not values:
-            print("[SHEET] Штрихкодів не знайдено в таблиці.")
             return ["❌ Штрихкодів не знайдено."]
-        barcodes = [row[0] for row in values if row]
-        print(f"[SHEET] Отримано штрихкоди з таблиці: {barcodes}")
-        return barcodes
+        return [row[0] for row in values if row]
     except Exception as e:
-        print(f"[ERROR] Помилка при обробці штрихкодів: {e}")
+        print(f"[ERROR] Помилка при зчитуванні штрихкодів: {e}")
         traceback.print_exc()
-        return [f"❌ Помилка при обробці штрихкодів: {e}"]
+        return [f"❌ Помилка при зчитуванні штрихкодів: {e}"]
 
-# ==== Відправка штрихкодів ====
-def delayed_send(user_id, file_name, public_url):
+# ==== Відправка фото + штрихкодів + кнопки ====
+def delayed_send(user_id, file_name, file_base_name, public_url):
+    time.sleep(8)  # затримка
+    barcodes = process_barcodes(file_base_name)
+    barcodes_text = "\n".join(barcodes)
     try:
-        time.sleep(8)  # затримка перед отриманням штрихкодів
-        barcodes = process_barcodes(public_url)
-        barcodes_text = "\n".join(barcodes)
         viber.send_messages(user_id, [
-            PictureMessage(media=public_url),
+            PictureMessage(media=public_url, text=file_name),
             TextMessage(text=barcodes_text)
         ])
-    except Exception as e:
-        print(f"[ERROR] Помилка при надсиланні штрихкодів: {e}")
-        traceback.print_exc()
+    except:
+        pass
 
     try:
         rich_media = {
@@ -120,21 +142,16 @@ def delayed_send(user_id, file_name, public_url):
             ]
         }
         pending_reports[file_name] = public_url
-        viber.send_messages(user_id, [
-            RichMediaMessage(rich_media=rich_media, min_api_version=2, alt_text="Скарга")
-        ])
-    except Exception as e:
-        print(f"[ERROR] Помилка при створенні кнопки: {e}")
-        traceback.print_exc()
+        viber.send_messages(user_id, [RichMediaMessage(rich_media=rich_media, min_api_version=2, alt_text="Скарга")])
+    except:
+        pass
 
-# ==== Основна логіка ====
+# ==== Основний маршрут ====
 @app.route('/', methods=['POST'])
 def incoming():
     try:
         viber_request = viber.parse_request(request.get_data())
-    except Exception as e:
-        print(f"[ERROR] Не вдалося розпарсити Viber запит: {e}")
-        traceback.print_exc()
+    except:
         return Response(status=500)
 
     if isinstance(viber_request, ViberConversationStartedRequest):
@@ -146,10 +163,10 @@ def incoming():
     if isinstance(viber_request, ViberMessageRequest):
         message = viber_request.message
         user_id = viber_request.sender.id
+        user_name = viber_request.sender.name
         token = viber_request.message_token
 
         if token in processed_message_tokens:
-            print(f"[SKIP] Повторне повідомлення token={token}")
             return Response(status=200)
         processed_message_tokens.add(token)
 
@@ -161,17 +178,28 @@ def incoming():
             if file_name in pending_reports:
                 photo_url = pending_reports.pop(file_name)
                 viber.send_messages(ADMIN_ID, [
-                    TextMessage(text=f"⚠️ Скарга від користувача: {user_id}"),
+                    TextMessage(text=f"⚠️ Скарга від {user_name} ({user_id})"),
                     PictureMessage(media=photo_url, text=file_name)
                 ])
                 viber.send_messages(user_id, [TextMessage(text="✅ Скаргу відправлено адміну.")])
+            return Response(status=200)
+
+        # === Лічильники ===
+        row_num, row = find_user_row(user_id)
+        if not row_num:
+            add_new_user(user_id, user_name)
+            row_num, row = find_user_row(user_id)
+
+        limit = int(row[2])
+        uploaded_today = int(row[3])
+        if uploaded_today >= limit:
+            viber.send_messages(user_id, [TextMessage(text=f"🚫 Ви досягли ліміту {limit} фото на сьогодні.")])
             return Response(status=200)
 
         # === Фото ===
         if hasattr(message, 'media') and message.media:
             image_url = message.media
             if image_url in processed_images:
-                print(f"[SKIP] Повторне фото {image_url}")
                 return Response(status=200)
             processed_images.add(image_url)
 
@@ -181,35 +209,28 @@ def incoming():
                     ext = 'jpg'
 
                 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                file_name = f"photo_{timestamp}.{ext}"
+                file_base_name = f"photo_{timestamp}"
+                file_name = f"{file_base_name}.{ext}"
 
-                print(f"[PHOTO] Отримано фото: {file_name}")
                 img_data = requests.get(image_url).content
                 file_stream = io.BytesIO(img_data)
                 media = MediaIoBaseUpload(file_stream, mimetype=f'image/{ext}')
                 file_metadata = {'name': file_name, 'parents': [GDRIVE_FOLDER_ID]}
-                file = drive_service.files().create(
-                    body=file_metadata, media_body=media, fields='id'
-                ).execute()
-
+                file = drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
                 file_id = file.get('id')
                 add_public_permission(file_id)
                 public_url = f"https://drive.google.com/uc?id={file_id}"
 
-                # коротке повідомлення
-                viber.send_messages(user_id, [
-                    TextMessage(text=f"📸 Фото отримано: {file_name}")
-                ])
+                update_user_counter(row_num, uploaded_today + 1)
 
-                # фоновий потік
+                viber.send_messages(user_id, [TextMessage(text=f"📸 Фото отримано: {file_name}")])
+
                 threading.Thread(
-                    target=lambda: delayed_send(user_id, file_name, public_url),
+                    target=lambda: delayed_send(user_id, file_name, file_base_name, public_url),
                     daemon=True
                 ).start()
 
             except Exception as e:
-                print(f"[ERROR] Помилка при обробці фото: {e}")
-                traceback.print_exc()
                 viber.send_messages(user_id, [TextMessage(text=f"❌ Помилка при обробці: {e}")])
 
     return Response(status=200)
@@ -219,5 +240,4 @@ def ping():
     return "OK", 200
 
 if __name__ == '__main__':
-    print("[START] Бот запущено на порту 5000")
     app.run(host='0.0.0.0', port=5000)
