@@ -79,7 +79,7 @@ def process_barcodes(public_url):
 # ==== Відправка штрихкодів ====
 def delayed_send(user_id, file_name, public_url):
     try:
-        time.sleep(5)  # затримка перед отриманням штрихкодів
+        time.sleep(8)  # затримка перед отриманням штрихкодів
         barcodes = process_barcodes(public_url)
         barcodes_text = "\n".join(barcodes)
         viber.send_messages(user_id, [
