@@ -17,24 +17,21 @@ from viberbot.api.viber_requests import ViberMessageRequest, ViberConversationSt
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
-
-import easyocr
+from google.cloud import vision
 
 # ==== Google API авторизація через OAuth ====
 GOOGLE_USER_KEY = json.loads(os.environ['GOOGLE_SA_JSON'])
+GOOGLE_VISION_KEY = json.loads(os.environ['GOOGLE_VISION_JSON'])
 
 creds = Credentials.from_authorized_user_info(GOOGLE_USER_KEY)
 drive_service = build('drive', 'v3', credentials=creds)
 sheets_service = build('sheets', 'v4', credentials=creds)
-
-# ==== EasyOCR ====
-ocr_reader = easyocr.Reader(['en'], gpu=False)  # виключаємо GPU для Render Free
+vision_client = vision.ImageAnnotatorClient.from_service_account_info(GOOGLE_VISION_KEY)
 
 # ==== Конфігурація ====
 VIBER_TOKEN = "4fdbb2493ae7ddc2-cd8869c327e2c592-60fd2dddaa295531"
 GDRIVE_FOLDER_ID = "1FteobWxkEUxPq1kBhUiP70a4-X0slbWe"
 SPREADSHEET_ID = "1W_fiI8FiwDn0sKq0ks7rGcWhXB0HEcHxar1uK4GL1P8"
-ADMIN_ID = "uJBIST3PYaJLoflfY/9zkQ=="
 DAILY_LIMIT_DEFAULT = 12
 
 # ==== Flask ====
@@ -89,14 +86,27 @@ def add_public_permission(file_id):
     except Exception as e:
         print(f"Помилка при додаванні доступу: {e}")
 
-# ==== EasyOCR для штрихкодів ====
+# ==== Vision API ====
 def extract_barcodes_from_image(file_stream):
     file_stream.seek(0)
-    img_bytes = file_stream.read()
-    results = ocr_reader.readtext(img_bytes, detail=0, paragraph=False)
-    barcodes = [s.replace(" ", "").replace("O", "0").replace("I", "1").replace("L", "1") 
-                for s in results if s.isdigit() and 8 <= len(s) <= 18]
-    return list(set(barcodes))
+    image = vision.Image(content=file_stream.read())
+    response = vision_client.text_detection(image=image)
+    texts = response.text_annotations
+    if not texts:
+        return []
+    text = texts[0].description
+    # Вилучаємо тільки цифри довжиною 8-18
+    raw_matches = [s for s in text.split() if s.isdigit() and 8 <= len(s) <= 18]
+    # Фільтр за непотрібними префіксами
+    forbidden_prefixes = [
+        "00", "1", "436", "202", "22", "403", "675", "459", "311", "377", "391", "2105",
+        "451", "288", "240", "442", "044", "363", "971", "097", "044", "44", "536", "053",
+        "82", "066", "66", "29", "36", "46", "38", "43", "26", "39", "35", "53", "30",
+        "67", "063", "63", "0674", "674", "0675", "675", "319", "086", "86", "095",
+        "9508", "11", "21", "050", "507", "6721", "06721", "2309", "999", "249", "9798"
+    ]
+    filtered = [code for code in raw_matches if not any(code.startswith(p) for p in forbidden_prefixes)]
+    return list(set(filtered))
 
 # ==== Відправка фото ====
 def delayed_send(user_id, file_name, public_url, file_stream):
@@ -184,16 +194,12 @@ def incoming():
                 file_stream.seek(0)
                 threading.Thread(
                     target=delayed_send,
-                    args=(user_id, file_name, f"https://drive.google.com/uc?id={file_id}", file_stream),
-                    daemon=True
+                    args=(user_id, file_name, f"https://drive.google.com/uc?id={file_id}", file_stream)
                 ).start()
             except Exception as e:
-                viber.send_messages(user_id, [TextMessage(text=f"❌ Помилка при обробці: {e}")])
+                viber.send_messages(user_id, [TextMessage(text=f"❌ Помилка при обробці фото: {e}")])
+
     return Response(status=200)
 
-@app.route('/', methods=['GET'])
-def ping():
-    return "OK", 200
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
