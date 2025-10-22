@@ -76,7 +76,7 @@ def process_barcodes(public_url):
         return [f"❌ Помилка при запиті до Apps Script: {e}"]
 
 # ==== Відправка штрихкодів ====
-ddef delayed_send(user_id, file_name, public_url):
+def delayed_send(user_id, file_name, public_url):
     try:
         import time
         print(f"[SEND] Активую Apps Script для {file_name}")
