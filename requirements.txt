@@ -5,7 +5,8 @@ google-auth
 google-auth-httplib2
 google-cloud-vision
 viberbot
-
+pillow
+pytesseract
 git+https://github.com/Viber/viber-bot-python.git#egg=viberbot
 
 
