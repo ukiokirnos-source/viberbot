@@ -13,13 +13,13 @@ from viberbot.api.messages.text_message import TextMessage
 from viberbot.api.messages.picture_message import PictureMessage
 from viberbot.api.viber_requests import ViberMessageRequest, ViberConversationStartedRequest
 
-from google.oauth2.service_account import Credentials
+from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 from google.cloud import vision
 
 # ==== Завантаження ключів із середовища ====
-GOOGLE_SHEETS_DRIVE_KEY = json.loads(os.environ['GOOGLE_SA_JSON'])
+GOOGLE_USER_KEY = json.loads(os.environ['GOOGLE_SA_JSON'])
 GOOGLE_VISION_KEY = json.loads(os.environ['GOOGLE_VISION_JSON'])
 
 # ==== Конфігурація ====
@@ -29,8 +29,8 @@ SPREADSHEET_ID = "1W_fiI8FiwDn0sKq0ks7rGcWhXB0HEcHxar1uK4GL1P8"
 ADMIN_ID = "uJBIST3PYaJLoflfY/9zkQ=="
 DAILY_LIMIT_DEFAULT = 12
 
-# ==== Google API авторизація ====
-creds = Credentials.from_service_account_info(GOOGLE_SHEETS_DRIVE_KEY)
+# ==== Google API авторизація через OAuth (твій обліковий запис) ====
+creds = Credentials.from_authorized_user_info(GOOGLE_USER_KEY)
 vision_client = vision.ImageAnnotatorClient.from_service_account_info(GOOGLE_VISION_KEY)
 
 drive_service = build('drive', 'v3', credentials=creds)
