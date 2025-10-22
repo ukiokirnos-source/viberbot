@@ -1,10 +1,10 @@
-
 import os
 import io
 import threading
 import time
 import datetime
 import requests
+import json
 
 from flask import Flask, request, Response
 
@@ -21,37 +21,38 @@ from googleapiclient.http import MediaIoBaseUpload
 
 from google.cloud import vision
 
-# ==== Секрети прямо в коді ====
-VIBER_TOKEN = "4fdbb2493ae7ddc2-cd8869c327e2c592-60fd2dddaa295531"
-GDRIVE_FOLDER_ID = "1FteobWxkEUxPq1kBhUiP70a4-X0slbWe"
-SPREADSHEET_ID = "1W_fiI8FiwDn0sKq0ks7rGcWhXB0HEcHxar1uK4GL1P8"
-ADMIN_ID = "uJBIST3PYaJLoflfY/9zkQ=="
-DAILY_LIMIT_DEFAULT = 12
+# ==== Секрети з ENV ====
+VIBER_TOKEN = os.environ['VIBER_TOKEN']
+GDRIVE_FOLDER_ID = os.environ['GDRIVE_FOLDER_ID']
+SPREADSHEET_ID = os.environ['SPREADSHEET_ID']
+ADMIN_ID = os.environ.get('ADMIN_ID', "")
+DAILY_LIMIT_DEFAULT = int(os.environ.get('DAILY_LIMIT_DEFAULT', 12))
 
-# ==== JSON ключі Google ====
-TOKEN_JSON_PATH = "token.json"          # Sheets + Drive
-VISION_KEY_PATH = "vision_key.json"     # Vision API
+# ==== Google API ключі з ENV ====
+TOKEN_JSON = os.environ['GOOGLE_SA_JSON']       # Sheets + Drive ключ
+VISION_JSON = os.environ['GOOGLE_VISION_JSON']  # Vision ключ
+
+creds_dict = json.loads(TOKEN_JSON)
+creds = Credentials.from_service_account_info(creds_dict)
+
+vision_creds_dict = json.loads(VISION_JSON)
+vision_client = vision.ImageAnnotatorClient.from_service_account_info(vision_creds_dict)
+
+# ==== Google сервіс ====
+drive_service = build('drive', 'v3', credentials=creds)
+sheets_service = build('sheets', 'v4', credentials=creds)
 
 # ==== Flask ====
 app = Flask(__name__)
 
-# ==== Ініціалізація Viber ====
+# ==== Viber ====
 viber = Api(BotConfiguration(
     name='Джексон🤖',
     avatar='https://raw.githubusercontent.com/ukiokirnos-source/viberbot/bea72a7878267cc513cdd87669f9eb6ee0faca50/free-icon-bot-4712106.png',
     auth_token=VIBER_TOKEN
 ))
 
-# ==== Google API ====
-creds = Credentials.from_service_account_file(TOKEN_JSON_PATH)
-drive_service = build('drive', 'v3', credentials=creds)
-sheets_service = build('sheets', 'v4', credentials=creds)
-
-# Vision API
-vision_client = vision.ImageAnnotatorClient.from_service_account_file(VISION_KEY_PATH)
-
 processed_message_tokens = set()
-pending_reports = {}
 
 # ==== Робота з таблицею ====
 def get_all_users():
@@ -121,10 +122,7 @@ def delayed_send(user_id, file_name, public_url, file_stream):
         viber.send_messages(user_id, [PictureMessage(media=public_url, text=f"Фото: {file_name}")])
         file_stream.seek(0)
         barcodes = extract_barcodes_from_image(file_stream)
-        if not barcodes:
-            barcodes_text = f"❌ Штрихкодів у фото '{file_name}' не знайдено."
-        else:
-            barcodes_text = "\n".join(barcodes)
+        barcodes_text = "\n".join(barcodes) if barcodes else f"❌ Штрихкодів у фото '{file_name}' не знайдено."
         viber.send_messages(user_id, [TextMessage(text=barcodes_text)])
     except Exception as e:
         print(f"Помилка при надсиланні: {e}")
