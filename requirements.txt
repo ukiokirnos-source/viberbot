@@ -1,14 +1,12 @@
 Flask==2.3.3
+requests==2.32.0
+google-api-python-client==2.96.0
+google-auth==2.23.0
+google-auth-httplib2==0.1.0
+google-cloud-vision==3.11.0
 viberbot==1.0.12
-google-api-python-client
-google-auth
-google-auth-httplib2
-google-cloud-vision
-pillow
-pytesseract
-opencv-python-headless
-numpy
-requests
+easyocr==1.6.2
+Pillow==12.0.0
 git+https://github.com/Viber/viber-bot-python.git#egg=viberbot
 
 
