@@ -7,8 +7,5 @@ google-cloud-vision==3.11.0
 viberbot==1.0.12
 easyocr==1.6.2
 Pillow==12.0.0
-numpy
-torch==2.9.0
-git+https://github.com/Viber/viber-bot-python.git#egg=viberbot
-
-
+numpy   # без конкретної версії, щоб Render взяв сумісну
+torch   # без конкретної версії, щоб Render взяв сумісну
