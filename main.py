@@ -11,7 +11,7 @@ from viberbot import Api
 from viberbot.api.bot_configuration import BotConfiguration
 from viberbot.api.messages.text_message import TextMessage
 from viberbot.api.messages.picture_message import PictureMessage
-from viberbot.api.messages.rich_media_message import RichMediaMessage
+from viberbot.api.messages.keyboard_message import KeyboardMessage
 from viberbot.api.viber_requests import ViberMessageRequest, ViberConversationStartedRequest
 
 from google.oauth2.credentials import Credentials
@@ -19,26 +19,21 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 from google.cloud import vision
 
+# ==== Google API авторизація через OAuth ====
+GOOGLE_USER_KEY = json.loads(os.environ['GOOGLE_SA_JSON'])
+GOOGLE_VISION_KEY = json.loads(os.environ['GOOGLE_VISION_JSON'])
+
+creds = Credentials.from_authorized_user_info(GOOGLE_USER_KEY)
+drive_service = build('drive', 'v3', credentials=creds)
+sheets_service = build('sheets', 'v4', credentials=creds)
+vision_client = vision.ImageAnnotatorClient.from_service_account_info(GOOGLE_VISION_KEY)
+
 # ==== Конфігурація ====
 VIBER_TOKEN = "4fdbb2493ae7ddc2-cd8869c327e2c592-60fd2dddaa295531"
 GDRIVE_FOLDER_ID = "1FteobWxkEUxPq1kBhUiP70a4-X0slbWe"
 SPREADSHEET_ID = "1W_fiI8FiwDn0sKq0ks7rGcWhXB0HEcHxar1uK4GL1P8"
 ADMIN_ID = "uJBIST3PYaJLoflfY/9zkQ=="
 DAILY_LIMIT_DEFAULT = 12
-
-# ==== OAuth токен Google ====
-GOOGLE_OAUTH_JSON = json.loads(os.environ['GOOGLE_SA_JSON'])  # <- тут твій JSON
-creds = Credentials(
-    token=GOOGLE_OAUTH_JSON['token'],
-    refresh_token=GOOGLE_OAUTH_JSON.get('refresh_token'),
-    token_uri=GOOGLE_OAUTH_JSON['token_uri'],
-    client_id=GOOGLE_OAUTH_JSON['client_id'],
-    client_secret=GOOGLE_OAUTH_JSON['client_secret'],
-    scopes=GOOGLE_OAUTH_JSON['scopes']
-)
-
-drive_service = build('drive', 'v3', credentials=creds)
-sheets_service = build('sheets', 'v4', credentials=creds)
 
 # ==== Flask ====
 app = Flask(__name__)
@@ -93,7 +88,6 @@ def add_public_permission(file_id):
         print(f"Помилка при додаванні доступу: {e}")
 
 # ==== Vision API ====
-vision_client = vision.ImageAnnotatorClient()  # Оставляем стандартний client, бо через OAuth
 def extract_barcodes_from_image(file_stream):
     image = vision.Image(content=file_stream.read())
     response = vision_client.text_detection(image=image)
@@ -128,36 +122,28 @@ def delayed_send(user_id, file_name, public_url, file_stream):
     except Exception as e:
         print(f"Помилка при надсиланні: {e}")
 
-# ==== Кнопка Скарга ====
-def send_start_buttons(user_id):
-    rich_media = {
-        "Type": "rich_media",
-        "ButtonsGroupColumns": 6,
-        "ButtonsGroupRows": 1,
-        "BgColor": "#FFFFFF",
-        "Buttons": [
-            {
-                "Columns": 6,
-                "Rows": 1,
-                "ActionType": "reply",
-                "ActionBody": "скарга",
-                "Text": "<font color=#323232>Скарга</font>",
-                "TextSize": "medium",
-                "BgColor": "#ffcccc"
-            }
-        ]
-    }
-    viber.send_messages(user_id, [RichMediaMessage(rich_media=rich_media)])
-
 # ==== Основний маршрут ====
 @app.route('/', methods=['POST'])
 def incoming():
     viber_request = viber.parse_request(request.get_data())
     if isinstance(viber_request, ViberConversationStartedRequest):
+        keyboard = {
+            "Type": "keyboard",
+            "DefaultHeight": True,
+            "Buttons": [
+                {
+                    "Columns": 6,
+                    "Rows": 1,
+                    "Text": "❗ Скарга",
+                    "ActionType": "reply",
+                    "ActionBody": "скарга",
+                    "BgColor": "#FF0000"
+                }
+            ]
+        }
         viber.send_messages(viber_request.user.id, [
-            TextMessage(text="Привіт! Відправ мені фото для сканування штрихкодів.\nЩоб дізнатися свій ID, напиши: Айді")
+            KeyboardMessage(keyboard=keyboard, text="Привіт! Відправ мені фото для сканування штрихкодів.\nЩоб дізнатися свій ID, напиши: Айді")
         ])
-        send_start_buttons(viber_request.user.id)
         return Response(status=200)
 
     message_token = getattr(viber_request, 'message_token', None)
@@ -174,8 +160,9 @@ def incoming():
         if text == "айді":
             viber.send_messages(user_id, [TextMessage(text=f"Ваш user_id: {user_id}")])
             return Response(status=200)
+
         if text == "скарга":
-            viber.send_messages(user_id, [TextMessage(text="🚨 Скаргу отримано! Адміністратор отримає повідомлення.")])
+            viber.send_messages(user_id, [TextMessage(text="🚨 Скарга прийнята, чекайте відповіді адміна.")])
             return Response(status=200)
 
         row_num, row = find_user_row(user_id)
