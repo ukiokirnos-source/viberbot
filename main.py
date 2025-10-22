@@ -26,22 +26,19 @@ SPREADSHEET_ID = "1W_fiI8FiwDn0sKq0ks7rGcWhXB0HEcHxar1uK4GL1P8"
 ADMIN_ID = "uJBIST3PYaJLoflfY/9zkQ=="
 DAILY_LIMIT_DEFAULT = 12
 
-# ==== Google API авторизація через старий OAuth токен ====
+# ==== OAuth токен Google ====
+GOOGLE_OAUTH_JSON = json.loads(os.environ['GOOGLE_SA_JSON'])  # <- тут твій JSON
 creds = Credentials(
-    token=os.environ.get('GOOGLE_OAUTH_TOKEN'),  # твій робочий токен
-    refresh_token=None,
-    token_uri="https://oauth2.googleapis.com/token",
-    client_id=None,
-    client_secret=None,
-    scopes=["https://www.googleapis.com/auth/drive.file", "https://www.googleapis.com/auth/spreadsheets"]
+    token=GOOGLE_OAUTH_JSON['token'],
+    refresh_token=GOOGLE_OAUTH_JSON.get('refresh_token'),
+    token_uri=GOOGLE_OAUTH_JSON['token_uri'],
+    client_id=GOOGLE_OAUTH_JSON['client_id'],
+    client_secret=GOOGLE_OAUTH_JSON['client_secret'],
+    scopes=GOOGLE_OAUTH_JSON['scopes']
 )
 
 drive_service = build('drive', 'v3', credentials=creds)
 sheets_service = build('sheets', 'v4', credentials=creds)
-
-# ==== Vision API (залишаємо сервіс акаунт) ====
-GOOGLE_VISION_KEY = json.loads(os.environ['GOOGLE_VISION_JSON'])
-vision_client = vision.ImageAnnotatorClient.from_service_account_info(GOOGLE_VISION_KEY)
 
 # ==== Flask ====
 app = Flask(__name__)
@@ -96,6 +93,7 @@ def add_public_permission(file_id):
         print(f"Помилка при додаванні доступу: {e}")
 
 # ==== Vision API ====
+vision_client = vision.ImageAnnotatorClient()  # Оставляем стандартний client, бо через OAuth
 def extract_barcodes_from_image(file_stream):
     image = vision.Image(content=file_stream.read())
     response = vision_client.text_detection(image=image)
@@ -130,6 +128,27 @@ def delayed_send(user_id, file_name, public_url, file_stream):
     except Exception as e:
         print(f"Помилка при надсиланні: {e}")
 
+# ==== Кнопка Скарга ====
+def send_start_buttons(user_id):
+    rich_media = {
+        "Type": "rich_media",
+        "ButtonsGroupColumns": 6,
+        "ButtonsGroupRows": 1,
+        "BgColor": "#FFFFFF",
+        "Buttons": [
+            {
+                "Columns": 6,
+                "Rows": 1,
+                "ActionType": "reply",
+                "ActionBody": "скарга",
+                "Text": "<font color=#323232>Скарга</font>",
+                "TextSize": "medium",
+                "BgColor": "#ffcccc"
+            }
+        ]
+    }
+    viber.send_messages(user_id, [RichMediaMessage(rich_media=rich_media)])
+
 # ==== Основний маршрут ====
 @app.route('/', methods=['POST'])
 def incoming():
@@ -138,6 +157,7 @@ def incoming():
         viber.send_messages(viber_request.user.id, [
             TextMessage(text="Привіт! Відправ мені фото для сканування штрихкодів.\nЩоб дізнатися свій ID, напиши: Айді")
         ])
+        send_start_buttons(viber_request.user.id)
         return Response(status=200)
 
     message_token = getattr(viber_request, 'message_token', None)
@@ -153,6 +173,9 @@ def incoming():
 
         if text == "айді":
             viber.send_messages(user_id, [TextMessage(text=f"Ваш user_id: {user_id}")])
+            return Response(status=200)
+        if text == "скарга":
+            viber.send_messages(user_id, [TextMessage(text="🚨 Скаргу отримано! Адміністратор отримає повідомлення.")])
             return Response(status=200)
 
         row_num, row = find_user_row(user_id)
