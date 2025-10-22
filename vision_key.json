@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "botviber",
+  "private_key_id": "2962c930e3c9bad1c49a362c6d637d5b429f4c79",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDAfR1Zl/lOJl+d\ndk2q64SJ2ZNRW7VHRHm1jrEMKHJRphLol7+5g97fwCfm+oPXBFIjLmOt2m4fjQh0\nXoVQZ544Br8Ks1VLKoGi1aqzQLQdeXeASZ6AXCSn3RGk0cQL+OdAZJ/DR4ZTGuzv\nRTUlcr5zOS5L1iezLWZsP6v6qU1hvPXWRltgUPNeZa3HjhV6FjC6DfUxhQZ/a6TA\nah+2uX5UKrDJwpORMRXvgYhGUjIT1UhUEUV7hLfMBPk3RaiIVYqZxSykhn0BAkXp\nGkIFFN2qCVU+EzzWldLDJiEQQnB3SMElNPxgSPFxotVbAkQ/plm7FBDJ+U4zpCZh\nUuQm60AbAgMBAAECggEAGV6kG/yGvuvEgF6+Sn+zaUPEQd3XclGDxQ/Nz+9oxHrM\nqoaNnhLTsM6FCSa4HQJpx6SZPf8Nspow+hLBzrYeyVLs96kT3c34ELvJPXToCFZ2\nZJx6B9WdKIQKNkdGEoSMs2pPuuTWFGVLwxbDtBrVH8nyiyDqUe2dk+N/HuYU19kI\nS6DB3Qju1sZkrW5+dKzLcWqDZWzQ9Xy1f602UM+zQP/nycwQr1M3t+DesfvSi3eU\nDCw/NnXRk+Ty22bwgeBsghBHhB95Iv+xGEfrF2GNEXNSV1B8L7cg+18nonlOAz/N\n5D7AdbAPJOGTKtRvf+SYzVdvMm1Y4ZlTwnr+uV8bYQKBgQDlIgkdL0Rc3Thenbni\nWVqsabJHNNATv3hWTrV6gXm3h2JNMRrjZUbtHaSRsJ0heF9WWpASxny7wzP2bHj4\nrF1Y7Y25fK1Sls4PscYOeeRX8Y+gHLotyRO3EC4x4BpGEUJhYyQuCIL9pgOxBkRU\nwu6S93W7rs65EO4jErDAUjK5qwKBgQDXDx3VDaXqwNd0kj9BEoJF8LBrUG1F521+\nMFft3nClp3lho6ATp0yOG8WXfemlaMRPxnW/G/tE0rZQlKDEQ+klfzkcs1zjK/hS\nPABa9nf3Ike0hMcE80UDpeyDho1pwduLIt9rMSPZbfcV0PwbAVfq53QIkOuX7FHb\nUmKFi5SDUQKBgQDGXNDHE0R7oIhMYP+rlO+Kk3ZjbrU0Y24qSbmSdMSKvgm8Cebd\nNbBRVnhCKEPf1fWzLHPNzUfuxO8XRpDzt0SY2A75pZXnCecabyynG58zA0zzr+r9\n+DW5JajYRMp6Hjb5WHrZ30SHklFfz60YNCmV0eV6tbsBPEbs1iFuXbrMQQKBgFJF\nLyVk7jbrBMFMfTQ4j2uQEv1KrDLUwLdIaSrPMIq+kZm/japXEts+Vo2Ilow3kvnt\nsvekDbCbZzFWWlYaoKM+kyuelgc1t+5Fk+E4blY1X/b34GbNZXZq0BrUq15s0b7d\nXVjVWKCCB8bpxrfSAL8VQfdQ8T+SIRJk5tmttuexAoGAKvYXothKFQgn1La3psFV\nu8nui2u66gUhpi+/fsfWe1WR2LY//WnEUaE/lRuMvCJuq8aMJ+3QURzIi9sLGZe0\nX+OSWwX0tMt7lzVPv52BekXvy9SY/7+0nPpLS79YijJD3op8whLyrg8iJXr7136n\n6KYzisZnP6JgG6MG+5ZWWiQ=\n-----END PRIVATE KEY-----\n",
+  "client_email": "viber-vision-bot@botviber.iam.gserviceaccount.com",
+  "client_id": "114966758849037991093",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/viber-vision-bot%40botviber.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}
