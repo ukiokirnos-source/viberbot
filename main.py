@@ -258,13 +258,13 @@ def incoming():
             fname = text[len("report_"):]
             if fname in pending_reports:
                 photo_url = pending_reports.pop(fname)
-                viber.send_messages(ADMIN_ID, [TextMessage(f"⚠️ Скарга від {user_name} ({user_id})"), PictureMessage(media=photo_url,text="Фото користувача")])
+                viber.send_messages(ADMIN_ID, [TextMessage(text=f"⚠️ Скарга від {user_name} ({user_id})"), PictureMessage(media=photo_url,text="Фото користувача")])
                 viber.send_messages(user_id,[TextMessage(text="Скарга успішно надіслана адміну ✅")])
             return Response(status=200)
 
         # Айді
         if text=="айді":
-            viber.send_messages(user_id,[TextMessage(f"Ваш user_id: {user_id}")])
+            viber.send_messages(user_id,[TextMessage(text=f"Ваш user_id: {user_id}")])
             return Response(status=200)
 
         # Користувач
@@ -276,7 +276,7 @@ def incoming():
         limit = int(row[2])
         uploaded_today = int(row[3])
         if uploaded_today >= limit:
-            viber.send_messages(user_id,[TextMessage(f"🚫 Ви досягли ліміту {limit} фото на сьогодні.")])
+            viber.send_messages(user_id,[TextMessage(text=f"🚫 Ви досягли ліміту {limit} фото на сьогодні.")])
             return Response(status=200)
 
         # Фото
@@ -284,7 +284,7 @@ def incoming():
             img_data = requests.get(message.media).content
             file_name = f"{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
             update_user_counter(row_num, uploaded_today+1)
-            viber.send_messages(user_id,[TextMessage(f"📥 Фото '{file_name}' отримано. Оброблюю...")])
+            viber.send_messages(user_id,[TextMessage(text=f"📥 Фото '{file_name}' отримано. Оброблюю...")])
             task_queue.put((user_id, img_data, file_name))
 
     return Response(status=200)
