@@ -17,14 +17,13 @@ from googleapiclient.http import MediaIoBaseUpload
 # ==== Налаштування ====
 VIBER_TOKEN = "4fdbb2493ae7ddc2-cd8869c327e2c592-60fd2dddaa295531"
 GDRIVE_FOLDER_ID = "1FteobWxkEUxPq1kBhUiP70a4-X0slbWe"
-SPREADSHEET_ID = "1W_fiI8FiwDn0sKq0ks7rGcWhXB0HEcHxar1uK4GL1P8"
 GOOGLE_TOKEN_FILE = "token.json"
 SCOPES = [
     'https://www.googleapis.com/auth/drive.file',
     'https://www.googleapis.com/auth/spreadsheets'
 ]
 ADMIN_ID = "uJBIST3PYaJLoflfY/9zkQ=="
-SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw5efos9x6GBVSghVWa0-IraGoaXN0Pl6EOH4X9e6g6fOfxIV5_RqzE-A0YnsC_1ZKq1A/exec"
+SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzY1dpIw-6jqNVX3jvx9KRwgVeiEqqLtRmvp5aOtfJJlikAHY6v-AAsyRiNEcbTU1aqAQ/exec"
 
 app = Flask(__name__)
 
@@ -39,7 +38,6 @@ viber = Api(BotConfiguration(
 print("[INIT] Ініціалізація Google API...")
 creds = Credentials.from_authorized_user_file(GOOGLE_TOKEN_FILE, SCOPES)
 drive_service = build('drive', 'v3', credentials=creds)
-sheets_service = build('sheets', 'v4', credentials=creds)
 print("[INIT] Google API готовий")
 
 processed_message_tokens = set()
@@ -57,7 +55,6 @@ def add_public_permission(file_id):
 
 # ==== Apps Script обробка ====
 def process_barcodes(file_id):
-    """Викликає Apps Script для обробки зображення та отримання штрихкодів"""
     try:
         print(f"[SCRIPT] Викликаю Apps Script для файлу {file_id}")
         resp = requests.post(SCRIPT_URL, json={"fileId": file_id}, timeout=40)
@@ -139,7 +136,6 @@ def incoming():
         traceback.print_exc()
         return Response(status=500)
 
-    # При старті
     if isinstance(viber_request, ViberConversationStartedRequest):
         print(f"[VIBER] Новий користувач: {viber_request.user.id}")
         viber.send_messages(viber_request.user.id, [
@@ -154,7 +150,6 @@ def incoming():
 
         text = getattr(message, 'text', '').strip().lower()
 
-        # Скарга
         if text.startswith("report_"):
             file_name = text.replace("report_", "")
             print(f"[REPORT] Отримано скаргу на {file_name}")
@@ -169,7 +164,6 @@ def incoming():
                 print("[REPORT] Фото не знайдено серед pending_reports.")
             return Response(status=200)
 
-        # Фото
         if hasattr(message, 'media') and message.media:
             try:
                 image_url = message.media
