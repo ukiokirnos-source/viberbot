@@ -157,53 +157,65 @@ def delete_old_sheets_worker():
                     print(f"[ERROR] Delete sheet: {e}")
         time.sleep(60)
 
-# ==== Черга обробки фото ====
 def process_queue_worker():
-    print("[WORKER] Queue worker started")
     while True:
         task = task_queue.get()
-        if task is None: break
+        if task is None:
+            break
         user_id, file_bytes, file_name = task
-        print(f"[QUEUE] Processing {file_name}")
+        print(f"[QUEUE] Start processing {file_name}")
 
-        # --- Завантаження на Drive ---
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        file_base = f"photo_{timestamp}"
+        file_ext = file_name.split('.')[-1]
+
+        # ==== Завантаження на Google Drive ====
         try:
-            gfile = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype='image/jpeg')
-            file_metadata = {'name': file_name, 'parents':[GDRIVE_FOLDER_ID]}
+            gfile = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype=f'image/{file_ext}')
+            file_metadata = {'name': f"{file_base}.{file_ext}", 'parents':[GDRIVE_FOLDER_ID]}
             f = drive_service.files().create(body=file_metadata, media_body=gfile, fields='id').execute()
             file_id = f['id']
+            print(f"[DRIVE] Uploaded {file_name} as {file_id}")
             add_public_permission(file_id)
             public_url = f"https://drive.google.com/uc?id={file_id}"
         except Exception as e:
-            print(f"[ERROR] Drive upload: {e}")
+            print(f"[DRIVE ERROR] {e}")
             viber.send_messages(user_id,[TextMessage(text=f"❌ Drive upload error: {e}")])
             task_queue.task_done()
             continue
 
-        # --- Vision API ---
-        barcodes = extract_barcodes_from_image(file_bytes)
-        print(f"[QUEUE] Barcodes: {barcodes}")
-
-        # --- Google Sheets ---
+        # ==== Отримання штрихкодів через Vision API ====
         try:
+            barcodes = extract_barcodes_from_image(file_bytes)
+            print(f"[VISION] Found barcodes for {file_name}: {barcodes}")
+        except Exception as e:
+            print(f"[VISION ERROR] {e}")
+            barcodes = []
+
+        # ==== Google Sheets ====
+        sheet_name = file_base
+        try:
+            # Створення або оновлення листа
             values = [[b] for b in barcodes] if barcodes else [["Штрихкодів не знайдено"]]
             sheets_service.spreadsheets().values().update(
                 spreadsheetId=SPREADSHEET_ID,
-                range=f"{file_name}!A1",
+                range=f"{sheet_name}!A1",
                 valueInputOption="RAW",
                 body={"values":values}
             ).execute()
-            props[file_name] = time.time()*1000
+            props[sheet_name] = time.time()*1000
+            print(f"[SHEET] Updated sheet {sheet_name}")
         except Exception as e:
-            print(f"[ERROR] Sheet update: {e}")
+            print(f"[SHEET ERROR] {e}")
 
-        # --- Надсилка користувачу ---
+        # ==== Надсилання фото користувачу ====
         try:
-            viber.send_messages(user_id,[PictureMessage(media=public_url, text=file_name)])
-            pending_reports[file_name] = public_url
+            viber.send_messages(user_id, [PictureMessage(media=public_url, text=file_name)])
+            print(f"[VIBER] Sent picture {file_name} to user {user_id}")
         except Exception as e:
-            print(f"[ERROR] Viber send picture: {e}")
+            print(f"[VIBER ERROR] Picture: {e}")
 
+        # ==== Надсилання кнопки скарги ====
         try:
             rm = {
                 "Type": "rich_media",
@@ -211,20 +223,24 @@ def process_queue_worker():
                 "ButtonsGroupRows": 1,
                 "BgColor": "#FFFFFF",
                 "Buttons":[
-                    {"Columns":6,"Rows":1,"ActionType":"reply","ActionBody":f"report_{file_name}","Text":"⚠️ Скарга","TextSize":"medium","TextVAlign":"middle","TextHAlign":"center","BgColor":"#ff6666","TextOpacity":100,"TextColor":"#FFFFFF"}
+                    {"Columns":6,"Rows":1,"ActionType":"reply","ActionBody":f"report_{file_base}","Text":"⚠️ Скарга","TextSize":"medium","TextVAlign":"middle","TextHAlign":"center","BgColor":"#ff6666","TextOpacity":100,"TextColor":"#FFFFFF"}
                 ]
             }
             viber.send_messages(user_id,[RichMediaMessage(rich_media=rm)])
+            print(f"[VIBER] Sent report button for {file_name}")
         except Exception as e:
-            print(f"[ERROR] Viber send button: {e}")
+            print(f"[VIBER ERROR] Button: {e}")
 
+        # ==== Надсилання тексту штрихкодів ====
         try:
             text_msg = "\n".join(barcodes) if barcodes else "❌ Штрихкодів не знайдено"
             viber.send_messages(user_id,[TextMessage(text=text_msg)])
+            print(f"[VIBER] Sent text barcodes for {file_name}")
         except Exception as e:
-            print(f"[ERROR] Viber send text: {e}")
+            print(f"[VIBER ERROR] Text: {e}")
 
         task_queue.task_done()
+        print(f"[QUEUE] Finished processing {file_name}")
 
 # ==== Flask Routes ====
 @app.route('/', methods=['POST'])
