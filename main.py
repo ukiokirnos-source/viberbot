@@ -24,7 +24,7 @@ SCOPES = [
 ]
 DAILY_LIMIT_DEFAULT = 8
 ADMIN_ID = "uJBIST3PYaJLoflfY/9zkQ=="
-SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxUROSbAEkd2l-rVG6noibQwN2hj-QCFwocGvHnvvsVNQ5lebs_5ubeZPtN9WWE3yDb/exec"  # <-- сюди вставити URL Apps Script
+SCRIPT_URL = "https://script.google.com/macros/s/AKfycby6oRsfOdaRI_Es7dDgryYFRWMdubjn3HqceQ1UfqhMTxLLU18YFUuAHCiTCMAuV5iiSQ/exec"  # <-- сюди вставити URL Apps Script
 
 app = Flask(__name__)
 
