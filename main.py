@@ -122,7 +122,7 @@ def process_photo(user_id, user_name, file_name, file_base_name, file_id, row_nu
     try:
         # Виклик скрипта (не блокуємо воркер)
         threading.Thread(target=lambda: requests.post(SCRIPT_URL, json={"imageUrl": image_url})).start()
-
+        time.sleep(10)
         # Відправка фото
         try:
             viber.send_messages(user_id, [PictureMessage(media=f"https://drive.google.com/uc?id={file_id}", text=f"Фото: {file_name}")])
