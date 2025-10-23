@@ -3,6 +3,8 @@ import threading
 import time
 import requests
 import datetime
+import ssl
+import certifi
 from flask import Flask, request, Response
 
 from viberbot import Api
@@ -15,6 +17,7 @@ from viberbot.api.viber_requests import ViberMessageRequest, ViberConversationSt
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
+from googleapiclient.http import HttpRequest
 
 # ==== Налаштування ====
 VIBER_TOKEN = "4fdbb2493ae7ddc2-cd8869c327e2c592-60fd2dddaa295531"
@@ -37,10 +40,14 @@ viber = Api(BotConfiguration(
     auth_token=VIBER_TOKEN
 ))
 
-# ==== Ініціалізація Google API ====
+# ==== SSL-контекст для Google API ====
+ssl_context = ssl.create_default_context(cafile=certifi.where())
+ssl_context.options |= ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1  # вимикаємо старі TLS
+
+# ==== Ініціалізація Google API з SSL ====
 creds = Credentials.from_authorized_user_file(GOOGLE_TOKEN_FILE, SCOPES)
-drive_service = build('drive', 'v3', credentials=creds)
-sheets_service = build('sheets', 'v4', credentials=creds)
+drive_service = build('drive', 'v3', credentials=creds, requestBuilder=lambda *args, **kwargs: HttpRequest(*args, **kwargs, ssl=ssl_context))
+sheets_service = build('sheets', 'v4', credentials=creds, requestBuilder=lambda *args, **kwargs: HttpRequest(*args, **kwargs, ssl=ssl_context))
 
 processed_message_tokens = set()
 pending_reports = {}  # file_name: photo_url
@@ -117,9 +124,12 @@ def wait_and_send_barcodes(user_id, file_base_name, file_name, public_url, timeo
     start_time = time.time()
     sheet_name = None
     while time.time() - start_time < timeout:
-        sheet_name = find_sheet_name(SPREADSHEET_ID, file_base_name)
-        if sheet_name:
-            break
+        try:
+            sheet_name = find_sheet_name(SPREADSHEET_ID, file_base_name)
+            if sheet_name:
+                break
+        except Exception as e:
+            print(f"SSL або API помилка, повторюємо: {e}")
         time.sleep(interval)
 
     # 1. Надсилаємо фото
@@ -166,7 +176,7 @@ def wait_and_send_barcodes(user_id, file_base_name, file_name, public_url, timeo
     else:
         barcodes = get_barcodes_from_sheet(SPREADSHEET_ID, sheet_name)
         barcodes_text = barcodes or f"❌ Штрихкодів у фото '{file_name}' не знайдено."
-    
+
     try:
         viber.send_messages(user_id, [TextMessage(text=barcodes_text)])
     except Exception as e:
@@ -250,10 +260,10 @@ def incoming():
                 update_user_counter(row_num, uploaded_today + 1)
 
                 viber.send_messages(user_id, [
-                    TextMessage(text=f"📥 Фото '{file_name}' отримано. Обробляю...")
+                    TextMessage(text=f"📥 Фото '{file_name}' отримано. Оброблюю...")
                 ])
 
-                # Стартуємо активне очікування листа
+                # Викликаємо функцію з чеканням листа
                 threading.Thread(
                     target=wait_and_send_barcodes,
                     args=(user_id, file_base_name, file_name, f"https://drive.google.com/uc?id={file_id}"),
