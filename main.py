@@ -114,7 +114,7 @@ def get_barcodes_from_sheet(sheet_id, sheet_name):
         return f"Помилка при зчитуванні штрихкодів: {str(e)}"
 
 # ==== Функція асинхронної обробки фото ====
-def process_photo(user_id, user_name, file_name, file_base_name, file_id, row_num, uploaded_today):
+def process_photo(user_id, user_name, file_name, file_base_name, file_id, row_num, uploaded_today, image_url):
     try:
         # Виконання скрипта
         try:
@@ -122,7 +122,7 @@ def process_photo(user_id, user_name, file_name, file_base_name, file_id, row_nu
         except Exception as e:
             print(f"Помилка при виклику скрипта: {e}")
 
-        time.sleep(15)  # пауза 15 сек
+        time.sleep(15)
 
         # Надсилання фото
         try:
@@ -262,7 +262,7 @@ def incoming():
                 # Старт обробки фото у окремому потоці
                 threading.Thread(
                     target=process_photo,
-                    args=(user_id, user_name, file_name, file_base_name, file_id, row_num, uploaded_today),
+                    args=(user_id, user_name, file_name, file_base_name, file_id, row_num, uploaded_today, image_url),
                     daemon=True
                 ).start()
 
