@@ -1,5 +1,3 @@
-
-рекап
 import io
 import threading
 import time
@@ -118,7 +116,6 @@ def get_barcodes_from_sheet(sheet_id, sheet_name):
 def delayed_send_barcodes(user_id, file_base_name, file_name, public_url):
     time.sleep(80)
 
-Andrew Moore, [22.10.2025 11:17]
 # 1. Надсилаємо фото
     try:
         viber.send_messages(user_id, [
@@ -224,7 +221,6 @@ def incoming():
             viber.send_messages(user_id, [TextMessage(text=f"🚫 Ви досягли ліміту {limit} фото на сьогодні.")])
             return Response(status=200)
 
-Andrew Moore, [22.10.2025 11:17]
 # Обробка фото
         if hasattr(message, 'media') and message.media:
             image_url = message.media
