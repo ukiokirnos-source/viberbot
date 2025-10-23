@@ -3,6 +3,7 @@ import threading
 import time
 import requests
 import datetime
+from queue import Queue
 from flask import Flask, request, Response
 
 from viberbot import Api
@@ -29,6 +30,8 @@ DAILY_LIMIT_DEFAULT = 12
 ADMIN_ID = "uJBIST3PYaJLoflfY/9zkQ=="
 SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw3qol9XKHcuR8Z0r72bqfnr60S0dL1IeNSqqsa49YqYujuH00MYK1qEvqEIP-ALF4bnw/exec"
 
+MAX_WORKERS = 2  # обмежуємо одночасні потоки для SSL
+
 app = Flask(__name__)
 
 # ==== Ініціалізація Viber бота ====
@@ -38,34 +41,54 @@ viber = Api(BotConfiguration(
     auth_token=VIBER_TOKEN
 ))
 
+# ==== Ініціалізація Google API ====
+creds = Credentials.from_authorized_user_file(GOOGLE_TOKEN_FILE, SCOPES)
+drive_service = build('drive', 'v3', credentials=creds)
+sheets_service = build('sheets', 'v4', credentials=creds)
+
 processed_message_tokens = set()
 pending_reports = {}  # file_name: photo_url
 
-# ==== Google сервіси локально для потоків ====
-def get_drive_service():
-    creds = Credentials.from_authorized_user_file(GOOGLE_TOKEN_FILE, SCOPES)
-    return build('drive', 'v3', credentials=creds)
+# ==== Черга для фото ====
+photo_queue = Queue()
 
-def get_sheets_service():
-    creds = Credentials.from_authorized_user_file(GOOGLE_TOKEN_FILE, SCOPES)
-    return build('sheets', 'v4', credentials=creds)
+def download_image(url):
+    """Безпечне завантаження фото через сесію"""
+    session = requests.Session()
+    resp = session.get(url, timeout=30)
+    resp.raise_for_status()
+    return resp.content
+
+def photo_worker():
+    while True:
+        args = photo_queue.get()
+        try:
+            process_photo(*args)
+        except Exception as e:
+            print(f"Worker error: {e}")
+        photo_queue.task_done()
+
+# Старт потоків воркерів один раз
+for _ in range(MAX_WORKERS):
+    t = threading.Thread(target=photo_worker, daemon=True)
+    t.start()
 
 # ==== Таблиця ====
-def get_all_users(sheets_service):
+def get_all_users():
     result = sheets_service.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID,
         range="Лист1!A:D"
     ).execute()
     return result.get('values', [])
 
-def find_user_row(user_id, sheets_service):
-    rows = get_all_users(sheets_service)
+def find_user_row(user_id):
+    rows = get_all_users()
     for idx, row in enumerate(rows):
         if len(row) > 0 and row[0] == user_id:
             return idx + 1, row
     return None, None
 
-def add_new_user(user_id, name, sheets_service):
+def add_new_user(user_id, name):
     sheets_service.spreadsheets().values().append(
         spreadsheetId=SPREADSHEET_ID,
         range="Лист1!A:D",
@@ -74,7 +97,7 @@ def add_new_user(user_id, name, sheets_service):
         body={"values": [[user_id, name, DAILY_LIMIT_DEFAULT, 0]]}
     ).execute()
 
-def update_user_counter(row_number, new_count, sheets_service):
+def update_user_counter(row_number, new_count):
     sheets_service.spreadsheets().values().update(
         spreadsheetId=SPREADSHEET_ID,
         range=f"Лист1!D{row_number}",
@@ -83,7 +106,7 @@ def update_user_counter(row_number, new_count, sheets_service):
     ).execute()
 
 # ==== Google Drive ====
-def add_public_permission(file_id, drive_service):
+def add_public_permission(file_id):
     try:
         permission = {'type': 'anyone', 'role': 'reader'}
         drive_service.permissions().create(fileId=file_id, body=permission).execute()
@@ -91,7 +114,7 @@ def add_public_permission(file_id, drive_service):
         print(f"Помилка при додаванні доступу: {e}")
 
 # ==== Штрихкоди ====
-def find_sheet_name(sheet_id, file_base_name, sheets_service):
+def find_sheet_name(sheet_id, file_base_name):
     try:
         spreadsheet = sheets_service.spreadsheets().get(spreadsheetId=sheet_id).execute()
         sheets = spreadsheet.get('sheets', [])
@@ -104,7 +127,7 @@ def find_sheet_name(sheet_id, file_base_name, sheets_service):
         print(f"Помилка при пошуку листа: {e}")
         return None
 
-def get_barcodes_from_sheet(sheet_id, sheet_name, sheets_service):
+def get_barcodes_from_sheet(sheet_id, sheet_name):
     try:
         result = sheets_service.spreadsheets().values().get(
             spreadsheetId=sheet_id,
@@ -117,12 +140,9 @@ def get_barcodes_from_sheet(sheet_id, sheet_name, sheets_service):
     except Exception as e:
         return f"Помилка при зчитуванні штрихкодів: {str(e)}"
 
-# ==== Функція обробки фото (локальні сервіси) ====
+# ==== Обробка фото ====
 def process_photo(user_id, user_name, file_name, file_base_name, file_id, row_num, uploaded_today, image_url):
     try:
-        drive_service_local = get_drive_service()
-        sheets_service_local = get_sheets_service()
-
         # Виконання скрипта
         try:
             requests.post(SCRIPT_URL, json={"imageUrl": image_url})
@@ -170,11 +190,11 @@ def process_photo(user_id, user_name, file_name, file_base_name, file_id, row_nu
             print(f"Помилка при надсиланні кнопки: {e}")
 
         # Надсилання штрихкодів
-        sheet_name = find_sheet_name(SPREADSHEET_ID, file_base_name, sheets_service_local)
+        sheet_name = find_sheet_name(SPREADSHEET_ID, file_base_name)
         if not sheet_name:
             barcodes_text = f"❌ Не знайдено листа з назвою '{file_base_name}'"
         else:
-            barcodes = get_barcodes_from_sheet(SPREADSHEET_ID, sheet_name, sheets_service_local)
+            barcodes = get_barcodes_from_sheet(SPREADSHEET_ID, sheet_name)
             barcodes_text = barcodes or f"❌ Штрихкодів у фото '{file_name}' не знайдено."
 
         try:
@@ -227,15 +247,11 @@ def incoming():
             viber.send_messages(user_id, [TextMessage(text=f"Ваш user_id: {user_id}")])
             return Response(status=200)
 
-        # Локальні сервіси для роботи
-        sheets_service_local = get_sheets_service()
-        drive_service_local = get_drive_service()
-
         # Додаємо користувача якщо нема
-        row_num, row = find_user_row(user_id, sheets_service_local)
+        row_num, row = find_user_row(user_id)
         if not row_num:
-            add_new_user(user_id, user_name, sheets_service_local)
-            row_num, row = find_user_row(user_id, sheets_service_local)
+            add_new_user(user_id, user_name)
+            row_num, row = find_user_row(user_id)
 
         limit = int(row[2])
         uploaded_today = int(row[3])
@@ -254,28 +270,24 @@ def incoming():
             file_name = f"{file_base_name}.{ext}"
 
             try:
-                img_data = requests.get(image_url).content
+                img_data = download_image(image_url)
                 file_stream = io.BytesIO(img_data)
                 media = MediaIoBaseUpload(file_stream, mimetype=f'image/{ext}')
                 file_metadata = {'name': file_name, 'parents': [GDRIVE_FOLDER_ID]}
-                file = drive_service_local.files().create(
+                file = drive_service.files().create(
                     body=file_metadata, media_body=media, fields='id'
                 ).execute()
                 file_id = file.get('id')
-                add_public_permission(file_id, drive_service_local)
+                add_public_permission(file_id)
 
-                update_user_counter(row_num, uploaded_today + 1, sheets_service_local)
+                update_user_counter(row_num, uploaded_today + 1)
 
                 viber.send_messages(user_id, [
                     TextMessage(text=f"📥 Фото '{file_name}' отримано. Оброблюю...")
                 ])
 
-                # Старт обробки фото у окремому потоці
-                threading.Thread(
-                    target=process_photo,
-                    args=(user_id, user_name, file_name, file_base_name, file_id, row_num, uploaded_today, image_url),
-                    daemon=True
-                ).start()
+                # Додаємо фото у чергу
+                photo_queue.put((user_id, user_name, file_name, file_base_name, file_id, row_num, uploaded_today, image_url))
 
             except Exception as e:
                 viber.send_messages(user_id, [TextMessage(text=f"❌ Помилка при обробці: {e}")])
