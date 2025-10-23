@@ -4,6 +4,7 @@ import requests
 import datetime
 import time
 import traceback
+from queue import Queue
 from flask import Flask, request, Response
 from viberbot import Api
 from viberbot.api.bot_configuration import BotConfiguration
@@ -24,7 +25,7 @@ SCOPES = [
     'https://www.googleapis.com/auth/drive.file',
     'https://www.googleapis.com/auth/spreadsheets'
 ]
-DAILY_LIMIT_DEFAULT = 12
+DAILY_LIMIT_DEFAULT = 8
 ADMIN_ID = "uJBIST3PYaJLoflfY/9zkQ=="
 SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw3qol9XKHcuR8Z0r72bqfnr60S0dL1IeNSqqsa49YqYujuH00MYK1qEvqEIP-ALF4bnw/exec"
 
@@ -43,7 +44,25 @@ processed_message_tokens = set()
 processed_images = set()
 pending_reports = {}
 
-# ==== Helper Functions ====
+# ==== Черга для обробки фото ====
+processing_queue = Queue()
+
+def worker():
+    while True:
+        item = processing_queue.get()
+        if item is None:
+            break
+        user_id, file_name, file_base_name, public_url = item
+        try:
+            time.sleep(2)
+            delayed_send_with_barcodes(user_id, file_name, file_base_name, public_url)
+        except Exception as e:
+            print(f"[ERROR] Worker exception: {e}")
+        processing_queue.task_done()
+
+threading.Thread(target=worker, daemon=True).start()
+
+# ==== Helpers ====
 def send_viber_text(user_id, text):
     try:
         viber.send_messages(user_id, [TextMessage(text=text)])
@@ -108,93 +127,52 @@ def call_script(public_url):
         print(f"[ERROR] Помилка при виклику скрипта: {e}")
         traceback.print_exc()
 
-# ==== Google Sheets Barcode Functions ====
-def find_sheet_name(spreadsheet_id, file_base_name):
-    try:
-        sheets_meta = sheets_service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
-        for sheet in sheets_meta['sheets']:
-            title = sheet['properties']['title']
-            if title == file_base_name:
-                return title
-        return None
-    except Exception as e:
-        print(f"[ERROR] Помилка при пошуку листа: {e}")
-        return None
-
-def get_barcodes_from_sheet(spreadsheet_id, sheet_name):
-    try:
-        result = sheets_service.spreadsheets().values().get(
-            spreadsheetId=spreadsheet_id,
-            range=f"{sheet_name}!A:A"
-        ).execute()
-        values = result.get('values', [])
-        if not values:
-            return None
-        return "\n".join([row[0] for row in values if row])
-    except Exception as e:
-        print(f"[ERROR] Помилка при отриманні штрихкодів: {e}")
-        return None
-
-# ==== Delayed Processing ====
 def delayed_send_with_barcodes(user_id, file_name, file_base_name, public_url):
+    # 1. Надсилаємо фото
     try:
-        time.sleep(12)  # затримка перед обробкою
-        call_script(public_url)
-
-        # 1. Надсилаємо фото
-        try:
-            viber.send_messages(user_id, [
-                PictureMessage(media=public_url, text=f"Фото: {file_name}")
-            ])
-        except Exception as e:
-            print(f"Помилка при надсиланні фото: {e}")
-
-        # 2. Надсилаємо кнопку "Скарга"
-        try:
-            rich_media_dict = {
-                "Type": "rich_media",
-                "ButtonsGroupColumns": 6,
-                "ButtonsGroupRows": 1,
-                "BgColor": "#FFFFFF",
-                "Buttons": [
-                    {
-                        "Columns": 6,
-                        "Rows": 1,
-                        "ActionType": "reply",
-                        "ActionBody": f"report_{file_name}",
-                        "Text": "⚠️ Скарга",
-                        "TextSize": "medium",
-                        "TextVAlign": "middle",
-                        "TextHAlign": "center",
-                        "BgColor": "#ff6666",
-                        "TextOpacity": 100,
-                        "TextColor": "#FFFFFF"
-                    }
-                ]
-            }
-            pending_reports[file_name] = public_url
-            viber.send_messages(user_id, [
-                RichMediaMessage(rich_media=rich_media_dict, min_api_version=2, alt_text="Скарга")
-            ])
-        except Exception as e:
-            print(f"Помилка при надсиланні кнопки: {e}")
-
-        # 3. Надсилаємо штрихкоди
-        sheet_name = find_sheet_name(SPREADSHEET_ID, file_base_name)
-        if not sheet_name:
-            barcodes_text = f"❌ Не знайдено листа з назвою '{file_base_name}'"
-        else:
-            barcodes = get_barcodes_from_sheet(SPREADSHEET_ID, sheet_name)
-            barcodes_text = barcodes or f"❌ Штрихкодів у фото '{file_name}' не знайдено."
-
-        try:
-            send_viber_text(user_id, barcodes_text)
-        except Exception as e:
-            print(f"Помилка при надсиланні штрихкодів: {e}")
-
+        viber.send_messages(user_id, [PictureMessage(media=public_url, text=f"Фото: {file_name}")])
     except Exception as e:
-        print(f"[ERROR] Помилка в delayed_send_with_barcodes: {e}")
-        traceback.print_exc()
+        print(f"[ERROR] Помилка при надсиланні фото: {e}")
+
+    # 2. Надсилаємо кнопку "Скарга"
+    try:
+        rich_media_dict = {
+            "Type": "rich_media",
+            "ButtonsGroupColumns": 6,
+            "ButtonsGroupRows": 1,
+            "BgColor": "#FFFFFF",
+            "Buttons": [
+                {
+                    "Columns": 6,
+                    "Rows": 1,
+                    "ActionType": "reply",
+                    "ActionBody": f"report_{file_name}",
+                    "Text": "⚠️ Скарга",
+                    "TextSize": "medium",
+                    "TextVAlign": "middle",
+                    "TextHAlign": "center",
+                    "BgColor": "#ff6666",
+                    "TextOpacity": 100,
+                    "TextColor": "#FFFFFF"
+                }
+            ]
+        }
+        pending_reports[file_name] = public_url
+        viber.send_messages(user_id, [RichMediaMessage(rich_media=rich_media_dict, min_api_version=2, alt_text="Скарга")])
+    except Exception as e:
+        print(f"[ERROR] Помилка при надсиланні кнопки: {e}")
+
+    # 3. Надсилаємо штрихкоди
+    sheet_name = find_sheet_name(SPREADSHEET_ID, file_base_name)
+    if not sheet_name:
+        barcodes_text = f"❌ Не знайдено листа з назвою '{file_base_name}'"
+    else:
+        barcodes = get_barcodes_from_sheet(SPREADSHEET_ID, sheet_name)
+        barcodes_text = barcodes or f"❌ Штрихкодів у фото '{file_name}' не знайдено."
+    try:
+        viber.send_messages(user_id, [TextMessage(text=barcodes_text)])
+    except Exception as e:
+        print(f"[ERROR] Помилка при надсиланні штрихкодів: {e}")
 
 # ==== Routes ====
 @app.route('/', methods=['POST'])
@@ -222,7 +200,6 @@ def incoming():
         user_name = viber_request.sender.name
         text = getattr(message, 'text', '').strip().lower()
 
-        # Команди
         if text == "айді":
             send_viber_text(user_id, f"Ваш user_id: {user_id}")
             return Response(status=200)
@@ -241,7 +218,6 @@ def incoming():
                     print(f"[ERROR] Помилка при надсиланні скарги адміну: {e}")
             return Response(status=200)
 
-        # Облік користувача
         row_num, row = find_user_row(user_id)
         if not row_num:
             add_new_user(user_id, user_name)
@@ -286,12 +262,8 @@ def incoming():
 
                 update_user_counter(row_num, uploaded_today + 1)
 
-                # Виклик функції, яка надсилає фото, кнопку і штрихкоди
-                threading.Thread(
-                    target=delayed_send_with_barcodes,
-                    args=(user_id, file_name, file_base_name, public_url),
-                    daemon=True
-                ).start()
+                # Додаємо фото у чергу на обробку
+                processing_queue.put((user_id, file_name, file_base_name, public_url))
 
             except Exception as e:
                 send_viber_text(user_id, f"❌ Помилка при обробці: {e}")
