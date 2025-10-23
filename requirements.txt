@@ -7,3 +7,4 @@ google-cloud-vision==3.11.0
 viberbot==1.0.12
 Pillow==12.0.0
 gunicorn
+aiohttp
