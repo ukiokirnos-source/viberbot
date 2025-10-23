@@ -33,7 +33,7 @@ app = Flask(__name__)
 # ==== Ініціалізація Viber бота ====
 viber = Api(BotConfiguration(
     name='Джексон🤖',
-    avatar='https://raw.githubusercontent.com/ukiokirnos-source/viberbot/bea72a7878267cc513cdd87669f9eb6ee0faca50/free-icon-bot-4712106.png',
+        avatar='https://raw.githubusercontent.com/ukiokirnos-source/viberbot/bea72a7878267cc513cdd87669f9eb6ee0faca50/free-icon-bot-4712106.png',
     auth_token=VIBER_TOKEN
 ))
 
@@ -113,15 +113,8 @@ def get_barcodes_from_sheet(sheet_id, sheet_name):
         return f"Помилка при зчитуванні штрихкодів: {str(e)}"
 
 # ==== Delayed send ====
-def delayed_send_barcodes(user_id, file_base_name, file_name, public_url, timeout=120):
-    start_time = time.time()
-    sheet_name = None
-
-    # Чекаємо, поки лист не з’явиться, або не вийде таймаут
-    while not sheet_name and (time.time() - start_time) < timeout:
-        sheet_name = find_sheet_name(SPREADSHEET_ID, file_base_name)
-        if not sheet_name:
-            time.sleep(5)  # перевіряємо кожні 5 секунд
+def delayed_send_barcodes(user_id, file_base_name, file_name, public_url):
+    time.sleep(80)
 
     # 1. Надсилаємо фото
     try:
@@ -154,7 +147,7 @@ def delayed_send_barcodes(user_id, file_base_name, file_name, public_url, timeou
                 }
             ]
         }
-        pending_reports[file_name] = public_url
+        pending_reports[file_name] = public_url  # зберігаємо URL за file_name
         viber.send_messages(user_id, [
             RichMediaMessage(rich_media=rich_media_dict, min_api_version=2, alt_text="Скарга")
         ])
@@ -162,11 +155,13 @@ def delayed_send_barcodes(user_id, file_base_name, file_name, public_url, timeou
         print(f"Помилка при надсиланні кнопки: {e}")
 
     # 3. Надсилаємо штрихкоди
+    sheet_name = find_sheet_name(SPREADSHEET_ID, file_base_name)
     if not sheet_name:
         barcodes_text = f"❌ Не знайдено листа з назвою '{file_base_name}'"
     else:
         barcodes = get_barcodes_from_sheet(SPREADSHEET_ID, sheet_name)
         barcodes_text = barcodes or f"❌ Штрихкодів у фото '{file_name}' не знайдено."
+
     try:
         viber.send_messages(user_id, [TextMessage(text=barcodes_text)])
     except Exception as e:
@@ -250,7 +245,7 @@ def incoming():
                 update_user_counter(row_num, uploaded_today + 1)
 
                 viber.send_messages(user_id, [
-                    TextMessage(text=f"📥 Фото '{file_name}' отримано. Оброблюю...")
+                    TextMessage(text=f"📥 Фото '{file_name}' отримано. Оброблюю (80 сек)...")
                 ])
 
                 threading.Thread(
