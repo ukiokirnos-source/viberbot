@@ -80,10 +80,8 @@ def update_user_counter(row_number, new_count):
 # ==== Google Drive ====
 def add_public_permission(file_id):
     try:
-        drive_service.permissions().create(
-            fileId=file_id,
-            body={'type': 'anyone', 'role': 'reader'}
-        ).execute()
+        permission = {'type': 'anyone', 'role': 'reader'}
+        drive_service.permissions().create(fileId=file_id, body=permission).execute()
     except Exception as e:
         print(f"Помилка при додаванні доступу: {e}")
 
@@ -91,9 +89,11 @@ def add_public_permission(file_id):
 def find_sheet_name(sheet_id, file_base_name):
     try:
         spreadsheet = sheets_service.spreadsheets().get(spreadsheetId=sheet_id).execute()
-        for sheet in spreadsheet.get('sheets', []):
-            if sheet.get('properties', {}).get('title', '') == file_base_name:
-                return file_base_name
+        sheets = spreadsheet.get('sheets', [])
+        for sheet in sheets:
+            title = sheet.get('properties', {}).get('title', '')
+            if title == file_base_name:
+                return title
         return None
     except Exception as e:
         print(f"Помилка при пошуку листа: {e}")
@@ -112,66 +112,65 @@ def get_barcodes_from_sheet(sheet_id, sheet_name):
     except Exception as e:
         return f"Помилка при зчитуванні штрихкодів: {str(e)}"
 
-# ==== Delayed send ====
-def delayed_send_barcodes(user_id, file_base_name, file_name, public_url, timeout=180, interval=5):
-    elapsed = 0
-    while elapsed < timeout:
+# ==== Очікування листа і надсилання ====
+def wait_and_send_barcodes(user_id, file_base_name, file_name, public_url, timeout=180, interval=3):
+    start_time = time.time()
+    sheet_name = None
+    while time.time() - start_time < timeout:
         sheet_name = find_sheet_name(SPREADSHEET_ID, file_base_name)
         if sheet_name:
-            barcodes = get_barcodes_from_sheet(SPREADSHEET_ID, sheet_name)
-            barcodes_text = barcodes or f"❌ Штрихкодів у фото '{file_name}' не знайдено."
-
-            # Надсилаємо фото
-            try:
-                viber.send_messages(user_id, [
-                    PictureMessage(media=public_url, text=f"Фото: {file_name}")
-                ])
-            except Exception as e:
-                print(f"Помилка при надсиланні фото: {e}")
-
-            # Надсилаємо кнопку "Скарга"
-            try:
-                rich_media_dict = {
-                    "Type": "rich_media",
-                    "ButtonsGroupColumns": 6,
-                    "ButtonsGroupRows": 1,
-                    "BgColor": "#FFFFFF",
-                    "Buttons": [{
-                        "Columns": 6,
-                        "Rows": 1,
-                        "ActionType": "reply",
-                        "ActionBody": f"report_{file_name}",
-                        "Text": "⚠️ Скарга",
-                        "TextSize": "medium",
-                        "TextVAlign": "middle",
-                        "TextHAlign": "center",
-                        "BgColor": "#ff6666",
-                        "TextOpacity": 100,
-                        "TextColor": "#FFFFFF"
-                    }]
-                }
-                pending_reports[file_name] = public_url
-                viber.send_messages(user_id, [
-                    RichMediaMessage(rich_media=rich_media_dict, min_api_version=2, alt_text="Скарга")
-                ])
-            except Exception as e:
-                print(f"Помилка при надсиланні кнопки: {e}")
-
-            # Надсилаємо штрихкоди
-            try:
-                viber.send_messages(user_id, [TextMessage(text=barcodes_text)])
-            except Exception as e:
-                print(f"Помилка при надсиланні штрихкодів: {e}")
-            return
-
+            break
         time.sleep(interval)
-        elapsed += interval
 
-    # Тайм-аут
+    # 1. Надсилаємо фото
     try:
-        viber.send_messages(user_id, [TextMessage(text=f"❌ Лист для фото '{file_name}' не з’явився за {timeout} секунд.")])
+        viber.send_messages(user_id, [
+            PictureMessage(media=public_url, text=f"Фото: {file_name}")
+        ])
     except Exception as e:
-        print(f"Помилка при надсиланні тайм-ауту: {e}")
+        print(f"Помилка при надсиланні фото: {e}")
+
+    # 2. Надсилаємо кнопку "Скарга"
+    try:
+        rich_media_dict = {
+            "Type": "rich_media",
+            "ButtonsGroupColumns": 6,
+            "ButtonsGroupRows": 1,
+            "BgColor": "#FFFFFF",
+            "Buttons": [
+                {
+                    "Columns": 6,
+                    "Rows": 1,
+                    "ActionType": "reply",
+                    "ActionBody": f"report_{file_name}",
+                    "Text": "⚠️ Скарга",
+                    "TextSize": "medium",
+                    "TextVAlign": "middle",
+                    "TextHAlign": "center",
+                    "BgColor": "#ff6666",
+                    "TextOpacity": 100,
+                    "TextColor": "#FFFFFF"
+                }
+            ]
+        }
+        pending_reports[file_name] = public_url
+        viber.send_messages(user_id, [
+            RichMediaMessage(rich_media=rich_media_dict, min_api_version=2, alt_text="Скарга")
+        ])
+    except Exception as e:
+        print(f"Помилка при надсиланні кнопки: {e}")
+
+    # 3. Надсилаємо штрихкоди або повідомлення про помилку
+    if not sheet_name:
+        barcodes_text = f"❌ Не знайдено листа з назвою '{file_base_name}' після {timeout} сек."
+    else:
+        barcodes = get_barcodes_from_sheet(SPREADSHEET_ID, sheet_name)
+        barcodes_text = barcodes or f"❌ Штрихкодів у фото '{file_name}' не знайдено."
+    
+    try:
+        viber.send_messages(user_id, [TextMessage(text=barcodes_text)])
+    except Exception as e:
+        print(f"Помилка при надсиланні штрихкодів: {e}")
 
 # ==== Основний маршрут ====
 @app.route('/', methods=['POST'])
@@ -195,7 +194,7 @@ def incoming():
         user_name = viber_request.sender.name
         text = getattr(message, 'text', '').strip().lower()
 
-        # Кнопка "Скарга"
+        # ==== Обробка натискання кнопки "Скарга" ====
         if text.startswith("report_"):
             file_name = text[len("report_"):]
             if file_name in pending_reports:
@@ -230,8 +229,8 @@ def incoming():
         # Обробка фото
         if hasattr(message, 'media') and message.media:
             image_url = message.media
-            ext = image_url.split('.')[-1].split('?')[0].lower()
-            if ext not in ['jpg', 'jpeg', 'png']:
+            ext = image_url.split('.')[-1].split('?')[0]
+            if ext.lower() not in ['jpg', 'jpeg', 'png']:
                 ext = 'jpg'
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             file_base_name = f"photo_{timestamp}"
@@ -251,11 +250,12 @@ def incoming():
                 update_user_counter(row_num, uploaded_today + 1)
 
                 viber.send_messages(user_id, [
-                    TextMessage(text=f"📥 Фото '{file_name}' отримано. Чекаю появи листа...")
+                    TextMessage(text=f"📥 Фото '{file_name}' отримано. Обробляю...")
                 ])
 
+                # Стартуємо активне очікування листа
                 threading.Thread(
-                    target=delayed_send_barcodes,
+                    target=wait_and_send_barcodes,
                     args=(user_id, file_base_name, file_name, f"https://drive.google.com/uc?id={file_id}"),
                     daemon=True
                 ).start()
