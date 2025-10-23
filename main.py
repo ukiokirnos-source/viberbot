@@ -3,7 +3,6 @@ import threading
 import time
 import requests
 import datetime
-from queue import Queue
 from flask import Flask, request, Response
 
 from viberbot import Api
@@ -34,7 +33,7 @@ app = Flask(__name__)
 # ==== Ініціалізація Viber бота ====
 viber = Api(BotConfiguration(
     name='Джексон🤖',
-    avatar='https://raw.githubusercontent.com/ukiokirnos-source/viberbot/bea72a7878267cc513cdd87669f9eb6ee0faca50/free-icon-bot-4712106.png',
+        avatar='https://raw.githubusercontent.com/ukiokirnos-source/viberbot/bea72a7878267cc513cdd87669f9eb6ee0faca50/free-icon-bot-4712106.png',
     auth_token=VIBER_TOKEN
 ))
 
@@ -117,13 +116,15 @@ def get_barcodes_from_sheet(sheet_id, sheet_name):
 def delayed_send_barcodes(user_id, file_base_name, file_name, public_url):
     time.sleep(80)
 
-    # Надсилаємо фото
+    # 1. Надсилаємо фото
     try:
-        viber.send_messages(user_id, [PictureMessage(media=public_url, text=f"Фото: {file_name}")])
+        viber.send_messages(user_id, [
+            PictureMessage(media=public_url, text=f"Фото: {file_name}")
+        ])
     except Exception as e:
         print(f"Помилка при надсиланні фото: {e}")
 
-    # Надсилаємо кнопку "Скарга"
+    # 2. Надсилаємо кнопку "Скарга"
     try:
         rich_media_dict = {
             "Type": "rich_media",
@@ -146,12 +147,14 @@ def delayed_send_barcodes(user_id, file_base_name, file_name, public_url):
                 }
             ]
         }
-        pending_reports[file_name] = public_url
-        viber.send_messages(user_id, [RichMediaMessage(rich_media=rich_media_dict, min_api_version=2, alt_text="Скарга")])
+        pending_reports[file_name] = public_url  # зберігаємо URL за file_name
+        viber.send_messages(user_id, [
+            RichMediaMessage(rich_media=rich_media_dict, min_api_version=2, alt_text="Скарга")
+        ])
     except Exception as e:
         print(f"Помилка при надсиланні кнопки: {e}")
 
-    # Надсилаємо штрихкоди
+    # 3. Надсилаємо штрихкоди
     sheet_name = find_sheet_name(SPREADSHEET_ID, file_base_name)
     if not sheet_name:
         barcodes_text = f"❌ Не знайдено листа з назвою '{file_base_name}'"
@@ -164,27 +167,15 @@ def delayed_send_barcodes(user_id, file_base_name, file_name, public_url):
     except Exception as e:
         print(f"Помилка при надсиланні штрихкодів: {e}")
 
-# ==== Черга для обробки фото ====
-photo_queue = Queue()
-
-def photo_worker():
-    while True:
-        task = photo_queue.get()
-        if task is None:
-            break
-        user_id, file_base_name, file_name, public_url = task
-        delayed_send_barcodes(user_id, file_base_name, file_name, public_url)
-        photo_queue.task_done()
-
-threading.Thread(target=photo_worker, daemon=True).start()
-
 # ==== Основний маршрут ====
 @app.route('/', methods=['POST'])
 def incoming():
     viber_request = viber.parse_request(request.get_data())
 
     if isinstance(viber_request, ViberConversationStartedRequest):
-        viber.send_messages(viber_request.user.id, [TextMessage(text="Привіт! Відправ мені накладну зі штрихкодами.\nЩоб дізнатися свій ID, напиши: Айді")])
+        viber.send_messages(viber_request.user.id, [
+            TextMessage(text="Привіт! Відправ мені накладну зі штрихкодами.\nЩоб дізнатися свій ID, напиши: Айді")
+        ])
         return Response(status=200)
 
     message_token = getattr(viber_request, 'message_token', None)
@@ -198,7 +189,7 @@ def incoming():
         user_name = viber_request.sender.name
         text = getattr(message, 'text', '').strip().lower()
 
-        # Обробка натискання кнопки "Скарга"
+        # ==== Обробка натискання кнопки "Скарга" ====
         if text.startswith("report_"):
             file_name = text[len("report_"):]
             if file_name in pending_reports:
@@ -230,7 +221,7 @@ def incoming():
             viber.send_messages(user_id, [TextMessage(text=f"🚫 Ви досягли ліміту {limit} фото на сьогодні.")])
             return Response(status=200)
 
-        # ==== Обробка фото ====
+        # Обробка фото
         if hasattr(message, 'media') and message.media:
             image_url = message.media
             ext = image_url.split('.')[-1].split('?')[0]
@@ -253,11 +244,15 @@ def incoming():
 
                 update_user_counter(row_num, uploaded_today + 1)
 
-                viber.send_messages(user_id, [TextMessage(text=f"📥 Фото '{file_name}' отримано. Оброблюю (80 сек)...")])
+                viber.send_messages(user_id, [
+                    TextMessage(text=f"📥 Фото '{file_name}' отримано. Оброблюю (80 сек)...")
+                ])
 
-                # Додаємо фото у чергу
-                photo_queue.put((user_id, file_base_name, file_name, f"https://drive.google.com/uc?id={file_id}"))
-
+                threading.Thread(
+                    target=delayed_send_barcodes,
+                    args=(user_id, file_base_name, file_name, f"https://drive.google.com/uc?id={file_id}"),
+                    daemon=True
+                ).start()
             except Exception as e:
                 viber.send_messages(user_id, [TextMessage(text=f"❌ Помилка при обробці: {e}")])
 
