@@ -28,7 +28,7 @@ SCOPES = [
 DAILY_LIMIT_DEFAULT = 8
 ADMIN_ID = "uJBIST3PYaJLoflfY/9zkQ=="
 
-app = Flask(name)
+app = Flask(__name__)
 
 # ==== Ініціалізація Viber бота ====
 viber = Api(BotConfiguration(
@@ -116,7 +116,7 @@ def get_barcodes_from_sheet(sheet_id, sheet_name):
 def delayed_send_barcodes(user_id, file_base_name, file_name, public_url):
     time.sleep(80)
 
-# 1. Надсилаємо фото
+    # 1. Надсилаємо фото
     try:
         viber.send_messages(user_id, [
             PictureMessage(media=public_url, text=f"Фото: {file_name}")
@@ -147,7 +147,7 @@ def delayed_send_barcodes(user_id, file_base_name, file_name, public_url):
                 }
             ]
         }
-        pending_reports[file_name] = public_url  # зберігаємо URL за file_name
+        pending_reports[file_name] = public_url
         viber.send_messages(user_id, [
             RichMediaMessage(rich_media=rich_media_dict, min_api_version=2, alt_text="Скарга")
         ])
@@ -221,7 +221,7 @@ def incoming():
             viber.send_messages(user_id, [TextMessage(text=f"🚫 Ви досягли ліміту {limit} фото на сьогодні.")])
             return Response(status=200)
 
-# Обробка фото
+        # ==== Обробка фото ====
         if hasattr(message, 'media') and message.media:
             image_url = message.media
             ext = image_url.split('.')[-1].split('?')[0]
@@ -262,5 +262,5 @@ def incoming():
 def ping():
     return "OK", 200
 
-if name == 'main':
+if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
