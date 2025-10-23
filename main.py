@@ -1,3 +1,5 @@
+
+рекап
 import io
 import threading
 import time
@@ -28,12 +30,12 @@ SCOPES = [
 DAILY_LIMIT_DEFAULT = 8
 ADMIN_ID = "uJBIST3PYaJLoflfY/9zkQ=="
 
-app = Flask(__name__)
+app = Flask(name)
 
 # ==== Ініціалізація Viber бота ====
 viber = Api(BotConfiguration(
     name='Джексон🤖',
-        avatar='https://raw.githubusercontent.com/ukiokirnos-source/viberbot/bea72a7878267cc513cdd87669f9eb6ee0faca50/free-icon-bot-4712106.png',
+    avatar='https://raw.githubusercontent.com/ukiokirnos-source/viberbot/bea72a7878267cc513cdd87669f9eb6ee0faca50/free-icon-bot-4712106.png',
     auth_token=VIBER_TOKEN
 ))
 
@@ -116,7 +118,8 @@ def get_barcodes_from_sheet(sheet_id, sheet_name):
 def delayed_send_barcodes(user_id, file_base_name, file_name, public_url):
     time.sleep(80)
 
-    # 1. Надсилаємо фото
+Andrew Moore, [22.10.2025 11:17]
+# 1. Надсилаємо фото
     try:
         viber.send_messages(user_id, [
             PictureMessage(media=public_url, text=f"Фото: {file_name}")
@@ -221,7 +224,8 @@ def incoming():
             viber.send_messages(user_id, [TextMessage(text=f"🚫 Ви досягли ліміту {limit} фото на сьогодні.")])
             return Response(status=200)
 
-        # Обробка фото
+Andrew Moore, [22.10.2025 11:17]
+# Обробка фото
         if hasattr(message, 'media') and message.media:
             image_url = message.media
             ext = image_url.split('.')[-1].split('?')[0]
@@ -262,5 +266,5 @@ def incoming():
 def ping():
     return "OK", 200
 
-if __name__ == '__main__':
+if name == 'main':
     app.run(host='0.0.0.0', port=5000)
