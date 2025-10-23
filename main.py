@@ -24,7 +24,7 @@ SCOPES = [
     'https://www.googleapis.com/auth/drive.file',
     'https://www.googleapis.com/auth/spreadsheets'
 ]
-DAILY_LIMIT_DEFAULT = 8
+DAILY_LIMIT_DEFAULT = 12
 ADMIN_ID = "uJBIST3PYaJLoflfY/9zkQ=="
 SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw3qol9XKHcuR8Z0r72bqfnr60S0dL1IeNSqqsa49YqYujuH00MYK1qEvqEIP-ALF4bnw/exec"
 
@@ -138,7 +138,7 @@ def get_barcodes_from_sheet(spreadsheet_id, sheet_name):
 # ==== Delayed Processing ====
 def delayed_send_with_barcodes(user_id, file_name, file_base_name, public_url):
     try:
-        time.sleep(8)  # затримка перед обробкою
+        time.sleep(12)  # затримка перед обробкою
         call_script(public_url)
 
         # 1. Надсилаємо фото
