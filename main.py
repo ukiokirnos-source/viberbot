@@ -118,7 +118,7 @@ def process_photo(user_id, user_name, file_name, file_base_name, file_id, row_nu
     try:
         # Виконання скрипта
         try:
-            requests.get(SCRIPT_URL, timeout=30)
+            requests.post(SCRIPT_URL, json={"imageUrl": image_url})
         except Exception as e:
             print(f"Помилка при виклику скрипта: {e}")
 
