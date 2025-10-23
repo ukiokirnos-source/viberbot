@@ -50,11 +50,13 @@ processed_message_tokens = set()
 pending_reports = {}  # file_name: photo_url
 photo_queue = Queue()
 
+
 # ==== Функції ====
 def download_image(url):
     resp = requests.get(url, timeout=30)
     resp.raise_for_status()
     return resp.content
+
 
 def photo_worker():
     while True:
@@ -65,8 +67,10 @@ def photo_worker():
             print(f"Worker error: {e}")
         photo_queue.task_done()
 
+
 for _ in range(MAX_WORKERS):
     threading.Thread(target=photo_worker, daemon=True).start()
+
 
 def get_all_users():
     result = sheets_service.spreadsheets().values().get(
@@ -75,12 +79,14 @@ def get_all_users():
     ).execute()
     return result.get('values', [])
 
+
 def find_user_row(user_id):
     rows = get_all_users()
     for idx, row in enumerate(rows):
         if len(row) > 0 and row[0] == user_id:
             return idx + 1, row
     return None, None
+
 
 def add_new_user(user_id, name):
     sheets_service.spreadsheets().values().append(
@@ -91,6 +97,7 @@ def add_new_user(user_id, name):
         body={"values": [[user_id, name, DAILY_LIMIT_DEFAULT, 0]]}
     ).execute()
 
+
 def update_user_counter(row_number, new_count):
     sheets_service.spreadsheets().values().update(
         spreadsheetId=SPREADSHEET_ID,
@@ -99,6 +106,7 @@ def update_user_counter(row_number, new_count):
         body={"values": [[new_count]]}
     ).execute()
 
+
 def add_public_permission(file_id):
     try:
         drive_service.permissions().create(
@@ -106,6 +114,7 @@ def add_public_permission(file_id):
         ).execute()
     except Exception as e:
         print(f"Помилка при додаванні доступу: {e}")
+
 
 def find_sheet_name(sheet_id, file_base_name):
     try:
@@ -120,6 +129,7 @@ def find_sheet_name(sheet_id, file_base_name):
         print(f"Помилка при пошуку листа: {e}")
         return None
 
+
 def get_barcodes_from_sheet(sheet_id, sheet_name):
     try:
         result = sheets_service.spreadsheets().values().get(
@@ -132,7 +142,8 @@ def get_barcodes_from_sheet(sheet_id, sheet_name):
     except Exception as e:
         return f"Помилка при зчитуванні штрихкодів: {str(e)}"
 
-def process_photo(user_id, user_name, file_name, file_base_name, file_id, row_num, uploaded_today, image_url):
+
+def process_photo(user_id, user_name, file_name, file_base_name, file_id, row_num, uploaded_today, image_url, limit):
     try:
         try:
             requests.post(SCRIPT_URL, json={"imageUrl": image_url})
@@ -156,6 +167,7 @@ def process_photo(user_id, user_name, file_name, file_base_name, file_id, row_nu
             viber.send_messages(user_id, [RichMediaMessage(rich_media=rich_media_dict, min_api_version=2, alt_text="Скарга")])
         except Exception as e:
             print(f"Помилка при надсиланні кнопки: {e}")
+
         sheet_name = find_sheet_name(SPREADSHEET_ID, file_base_name)
         if not sheet_name:
             barcodes_text = f"❌ Не знайдено листа з назвою '{file_base_name}'"
@@ -166,6 +178,12 @@ def process_photo(user_id, user_name, file_name, file_base_name, file_id, row_nu
             viber.send_messages(user_id, [TextMessage(text=barcodes_text)])
         except Exception as e:
             print(f"Помилка при надсиланні штрихкодів: {e}")
+
+        # Оновлення лічильника після обробки фото
+        uploaded_today += 1
+        if uploaded_today <= limit:
+            update_user_counter(row_num, uploaded_today)
+
     except Exception as e:
         viber.send_messages(user_id, [TextMessage(text=f"❌ Помилка при обробці: {e}")])
 
@@ -222,9 +240,10 @@ def incoming():
                 viber.send_messages(user_id, [TextMessage(text=f"🚫 Досягнуто ліміт {limit} фото на сьогодні.")])
                 break
 
-            ext = image_url.split('.')[-1].split('?')[0]
-            if ext.lower() not in ['jpg', 'jpeg', 'png']:
+            ext = image_url.split('.')[-1].split('?')[0].lower()
+            if ext not in ['jpg', 'jpeg', 'png']:
                 ext = 'jpg'
+
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             file_base_name = f"photo_{timestamp}"
             file_name = f"{file_base_name}.{ext}"
@@ -238,21 +257,21 @@ def incoming():
                 file_id = file.get('id')
                 add_public_permission(file_id)
 
-                uploaded_today += 1
-                update_user_counter(row_num, uploaded_today)
-
                 viber.send_messages(user_id, [TextMessage(text=f"📥 Фото '{file_name}' отримано. Оброблюю...")])
 
-                photo_queue.put((user_id, user_name, file_name, file_base_name, file_id, row_num, uploaded_today, image_url))
+                # Додаємо фото у чергу, передаємо ліміт для воркера
+                photo_queue.put((user_id, user_name, file_name, file_base_name, file_id, row_num, uploaded_today, image_url, limit))
 
             except Exception as e:
                 viber.send_messages(user_id, [TextMessage(text=f"❌ Помилка при обробці: {e}")])
 
     return Response(status=200)
 
+
 @app.route('/', methods=['GET'])
 def ping():
     return "OK", 200
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
