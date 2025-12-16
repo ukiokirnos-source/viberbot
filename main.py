@@ -2,6 +2,7 @@ import io
 import base64
 import requests
 import datetime
+import hashlib
 
 from flask import Flask, request, Response
 from viberbot import Api
@@ -48,6 +49,7 @@ drive = build('drive', 'v3', credentials=creds)
 sheets = build('sheets', 'v4', credentials=creds)
 
 processed_tokens = set()
+processed_images = set()   # ← ОЦЕ ГОЛОВНЕ
 pending_reports = {}
 
 # ================== SHEETS ==================
@@ -107,7 +109,7 @@ def incoming():
 
     if isinstance(req, ViberConversationStartedRequest):
         viber.send_messages(req.user.id, [
-            TextMessage(text="Привіт! Відправ фото, а я відправлю штрих-код😊")
+            TextMessage(text="Привіт! Відправ фото, а я відправлю штрих-код 😊")
         ])
         return Response(status=200)
 
@@ -122,6 +124,13 @@ def incoming():
         name = req.sender.name
 
         if hasattr(msg, 'media') and msg.media:
+            img = requests.get(msg.media, timeout=10).content
+
+            img_hash = hashlib.sha256(img).hexdigest()
+            if img_hash in processed_images:
+                return Response(status=200)
+            processed_images.add(img_hash)
+
             row, data = find_user(user_id)
             if not row:
                 add_user(user_id, name)
@@ -136,19 +145,13 @@ def incoming():
                 ])
                 return Response(status=200)
 
-            img = requests.get(msg.media, timeout=10).content
             img64 = base64.b64encode(img).decode()
-
             r = requests.post(WEB_APP_URL, json={"image": img64}, timeout=20)
             barcodes = r.json().get("barcodes", [])
 
             update_counter(row, used + 1)
 
-            if barcodes:
-                text = "" + "\n".join(barcodes)
-            else:
-                text = "❌ Штрихкодів не знайдено"
-
+            text = "\n".join(barcodes) if barcodes else "❌ Штрихкодів не знайдено"
             viber.send_messages(user_id, [TextMessage(text=text)])
 
             fname = f"photo_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
@@ -174,12 +177,9 @@ def incoming():
                         }]
                     },
                     min_api_version=2
-                )
+                ),
+                TextMessage(text="──────────────\nГотово.\n──────────────")
             ])
-            viber.send_messages(user_id, [
-    TextMessage(text="──────────────\nГотово.\n──────────────")
-])
-
 
         elif hasattr(msg, 'text') and msg.text.startswith("report_"):
             fname = msg.text.replace("report_", "")
