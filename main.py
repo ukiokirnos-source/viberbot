@@ -176,6 +176,10 @@ def incoming():
                     min_api_version=2
                 )
             ])
+            viber.send_messages(user_id, [
+    TextMessage(text="──────────────\nГотово.\n──────────────")
+])
+
 
         elif hasattr(msg, 'text') and msg.text.startswith("report_"):
             fname = msg.text.replace("report_", "")
