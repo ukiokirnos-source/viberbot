@@ -8,6 +8,7 @@ from viberbot import Api
 from viberbot.api.bot_configuration import BotConfiguration
 from viberbot.api.messages.text_message import TextMessage
 from viberbot.api.messages.picture_message import PictureMessage
+from viberbot.api.messages.rich_media_message import RichMediaMessage
 from viberbot.api.viber_requests import ViberMessageRequest, ViberConversationStartedRequest
 
 from google.oauth2.credentials import Credentials
@@ -17,13 +18,20 @@ from googleapiclient.http import MediaIoBaseUpload
 # ================== НАЛАШТУВАННЯ ==================
 
 VIBER_TOKEN = "4fdbb2493ae7ddc2-cd8869c327e2c592-60fd2dddaa295531"
+ADMIN_ID = "uJBIST3PYaJLoflfY/9zkQ=="
 
 WEB_APP_URL = "https://script.google.com/macros/s/AKfycby4pDNg0fUyxmEV49ObZi3zwt131jEO_U39-E25-W9bK4Wk1crDkgqYqbliJBkVo26Srg/exec"
 
+SPREADSHEET_ID = "1W_fiI8FiwDn0sKq0ks7rGcWhXB0HEcHxar1uK4GL1P8"
 GDRIVE_FOLDER_ID = "1FteobWxkEUxPq1kBhUiP70a4-X0slbWe"
 GOOGLE_TOKEN_FILE = "token.json"
 
-SCOPES = ['https://www.googleapis.com/auth/drive.file']
+DAILY_LIMIT_DEFAULT = 12
+
+SCOPES = [
+    'https://www.googleapis.com/auth/drive.file',
+    'https://www.googleapis.com/auth/spreadsheets'
+]
 
 # =================================================
 
@@ -36,91 +44,148 @@ viber = Api(BotConfiguration(
 ))
 
 creds = Credentials.from_authorized_user_file(GOOGLE_TOKEN_FILE, SCOPES)
-drive_service = build('drive', 'v3', credentials=creds)
+drive = build('drive', 'v3', credentials=creds)
+sheets = build('sheets', 'v4', credentials=creds)
 
-processed_message_tokens = set()
+processed_tokens = set()
+pending_reports = {}
+
+# ================== SHEETS ==================
+
+def get_users():
+    res = sheets.spreadsheets().values().get(
+        spreadsheetId=SPREADSHEET_ID,
+        range="Лист1!A:D"
+    ).execute()
+    return res.get("values", [])
+
+def find_user(user_id):
+    rows = get_users()
+    for i, r in enumerate(rows):
+        if r and r[0] == user_id:
+            return i + 1, r
+    return None, None
+
+def add_user(user_id, name):
+    sheets.spreadsheets().values().append(
+        spreadsheetId=SPREADSHEET_ID,
+        range="Лист1!A:D",
+        valueInputOption="RAW",
+        body={"values": [[user_id, name, DAILY_LIMIT_DEFAULT, 0]]}
+    ).execute()
+
+def update_counter(row, value):
+    sheets.spreadsheets().values().update(
+        spreadsheetId=SPREADSHEET_ID,
+        range=f"Лист1!D{row}",
+        valueInputOption="RAW",
+        body={"values": [[value]]}
+    ).execute()
 
 # ================== DRIVE ==================
 
-def upload_to_drive(img_bytes, filename):
-    stream = io.BytesIO(img_bytes)
-    media = MediaIoBaseUpload(stream, mimetype='image/jpeg')
-    file_metadata = {'name': filename, 'parents': [GDRIVE_FOLDER_ID]}
-    file = drive_service.files().create(
-        body=file_metadata,
+def upload_photo(bytes_, name):
+    media = MediaIoBaseUpload(io.BytesIO(bytes_), mimetype='image/jpeg')
+    file = drive.files().create(
+        body={'name': name, 'parents': [GDRIVE_FOLDER_ID]},
         media_body=media,
         fields='id'
     ).execute()
 
-    file_id = file.get('id')
-
-    drive_service.permissions().create(
-        fileId=file_id,
+    drive.permissions().create(
+        fileId=file['id'],
         body={'type': 'anyone', 'role': 'reader'}
     ).execute()
 
-    return f"https://drive.google.com/uc?id={file_id}"
+    return f"https://drive.google.com/uc?id={file['id']}"
 
 # ================== MAIN ==================
 
 @app.route('/', methods=['POST'])
 def incoming():
-    viber_request = viber.parse_request(request.get_data())
+    req = viber.parse_request(request.get_data())
 
-    if isinstance(viber_request, ViberConversationStartedRequest):
-        viber.send_messages(viber_request.user.id, [
-            TextMessage(text="Кидай фото зі штрихкодами. Результат буде одразу.")
+    if isinstance(req, ViberConversationStartedRequest):
+        viber.send_messages(req.user.id, [
+            TextMessage(text="Кидай фото. Штрихкоди повертаю одразу.")
         ])
         return Response(status=200)
 
-    token = getattr(viber_request, 'message_token', None)
-    if token in processed_message_tokens:
+    token = getattr(req, 'message_token', None)
+    if token in processed_tokens:
         return Response(status=200)
-    processed_message_tokens.add(token)
+    processed_tokens.add(token)
 
-    if isinstance(viber_request, ViberMessageRequest):
-        message = viber_request.message
-        user_id = viber_request.sender.id
+    if isinstance(req, ViberMessageRequest):
+        msg = req.message
+        user_id = req.sender.id
+        name = req.sender.name
 
-        if hasattr(message, 'media') and message.media:
-            try:
-                # 1️⃣ Качаємо фото
-                img_bytes = requests.get(message.media, timeout=10).content
+        if hasattr(msg, 'media') and msg.media:
+            row, data = find_user(user_id)
+            if not row:
+                add_user(user_id, name)
+                row, data = find_user(user_id)
 
-                # 2️⃣ В base64
-                img_base64 = base64.b64encode(img_bytes).decode("utf-8")
+            limit = int(data[2])
+            used = int(data[3])
 
-                # 3️⃣ Web App → Vision API
-                resp = requests.post(
-                    WEB_APP_URL,
-                    json={"image": img_base64},
-                    timeout=20
+            if used >= limit:
+                viber.send_messages(user_id, [
+                    TextMessage(text=f"🚫 Ліміт {limit} фото на сьогодні.")
+                ])
+                return Response(status=200)
+
+            img = requests.get(msg.media, timeout=10).content
+            img64 = base64.b64encode(img).decode()
+
+            r = requests.post(WEB_APP_URL, json={"image": img64}, timeout=20)
+            barcodes = r.json().get("barcodes", [])
+
+            update_counter(row, used + 1)
+
+            if barcodes:
+                text = "📦 Штрихкоди:\n" + "\n".join(barcodes)
+            else:
+                text = "❌ Штрихкодів не знайдено"
+
+            viber.send_messages(user_id, [TextMessage(text=text)])
+
+            fname = f"photo_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+            url = upload_photo(img, fname)
+
+            pending_reports[fname] = url
+
+            viber.send_messages(user_id, [
+                PictureMessage(media=url, text="Фото збережено"),
+                RichMediaMessage(
+                    rich_media={
+                        "Type": "rich_media",
+                        "ButtonsGroupColumns": 6,
+                        "ButtonsGroupRows": 1,
+                        "Buttons": [{
+                            "Columns": 6,
+                            "Rows": 1,
+                            "ActionType": "reply",
+                            "ActionBody": f"report_{fname}",
+                            "Text": "⚠️ Скарга",
+                            "BgColor": "#ff4444",
+                            "TextColor": "#ffffff"
+                        }]
+                    },
+                    min_api_version=2
                 )
+            ])
 
-                result = resp.json()
-                barcodes = result.get("barcodes", [])
-
-                # 4️⃣ Відповідь юзеру
-                if barcodes:
-                    text = "📦 Штрихкоди:\n" + "\n".join(barcodes)
-                else:
-                    text = "❌ Штрихкоди не знайдено"
-
-                viber.send_messages(user_id, [
-                    TextMessage(text=text)
+        elif hasattr(msg, 'text') and msg.text.startswith("report_"):
+            fname = msg.text.replace("report_", "")
+            if fname in pending_reports:
+                viber.send_messages(ADMIN_ID, [
+                    TextMessage(text=f"⚠️ Скарга від {user_id}"),
+                    PictureMessage(media=pending_reports[fname])
                 ])
-
-                # 5️⃣ Фото — фоном у Drive
-                filename = f"photo_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
-                public_url = upload_to_drive(img_bytes, filename)
-
                 viber.send_messages(user_id, [
-                    PictureMessage(media=public_url, text="📸 Фото збережено")
-                ])
-
-            except Exception as e:
-                viber.send_messages(user_id, [
-                    TextMessage(text=f"❌ Помилка: {str(e)}")
+                    TextMessage(text="Скарга відправлена адміну ✅")
                 ])
 
     return Response(status=200)
