@@ -107,7 +107,7 @@ def incoming():
 
     if isinstance(req, ViberConversationStartedRequest):
         viber.send_messages(req.user.id, [
-            TextMessage(text="Кидай фото. Штрихкоди повертаю одразу.")
+            TextMessage(text="Привіт! Відправ фото, а я відправлю штрих-код😊")
         ])
         return Response(status=200)
 
@@ -132,7 +132,7 @@ def incoming():
 
             if used >= limit:
                 viber.send_messages(user_id, [
-                    TextMessage(text=f"🚫 Ліміт {limit} фото на сьогодні.")
+                    TextMessage(text=f"🚫 Ліміт {limit} фото на сьогодні вичерпано.")
                 ])
                 return Response(status=200)
 
@@ -145,7 +145,7 @@ def incoming():
             update_counter(row, used + 1)
 
             if barcodes:
-                text = "📦 Штрихкоди:\n" + "\n".join(barcodes)
+                text = "" + "\n".join(barcodes)
             else:
                 text = "❌ Штрихкодів не знайдено"
 
@@ -157,7 +157,7 @@ def incoming():
             pending_reports[fname] = url
 
             viber.send_messages(user_id, [
-                PictureMessage(media=url, text="Фото збережено"),
+                PictureMessage(media=url, text=""),
                 RichMediaMessage(
                     rich_media={
                         "Type": "rich_media",
