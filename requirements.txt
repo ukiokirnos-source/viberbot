@@ -8,5 +8,5 @@ easyocr
 torch
 torchvision
 torchaudio
-
+gunicorn
 git+https://github.com/Viber/viber-bot-python.git#egg=viberbot
