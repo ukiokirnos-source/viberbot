@@ -1,11 +1,7 @@
 Flask
 requests
+viberbot
 google-api-python-client
 google-auth
 google-auth-httplib2
-easyocr
-torch
-torchvision
-torchaudio
 gunicorn
-viberbot @ git+https://github.com/Viber/viber-bot-python.git#egg=viberbot
