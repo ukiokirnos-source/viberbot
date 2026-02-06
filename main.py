@@ -1,7 +1,9 @@
 import io
+import base64
 import requests
-import hashlib
 import datetime
+import hashlib
+
 from flask import Flask, request, Response
 from viberbot import Api
 from viberbot.api.bot_configuration import BotConfiguration
@@ -10,29 +12,42 @@ from viberbot.api.messages.picture_message import PictureMessage
 from viberbot.api.messages.rich_media_message import RichMediaMessage
 from viberbot.api.viber_requests import ViberMessageRequest, ViberConversationStartedRequest
 
-from google.oauth2.service_account import Credentials
+from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
 # ================== НАЛАШТУВАННЯ ==================
+
 VIBER_TOKEN = "4fdbb2493ae7ddc2-cd8869c327e2c592-60fd2dddaa295531"
 ADMIN_ID = "uJBIST3PYaJLoflfY/9zkQ=="
+
+WEB_APP_URL = "https://script.google.com/macros/s/AKfycby4pDNg0fUyxmEV49ObZi3zwt131jEO_U39-E25-W9bK4Wk1crDkgqYqbliJBkVo26Srg/exec"
+
 SPREADSHEET_ID = "1W_fiI8FiwDn0sKq0ks7rGcWhXB0HEcHxar1uK4GL1P8"
 GDRIVE_FOLDER_ID = "1FteobWxkEUxPq1kBhUiP70a4-X0slbWe"
-GOOGLE_CREDENTIALS_JSON = "credentials.json"
-DAILY_LIMIT_DEFAULT = 12
-SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/spreadsheets']
+GOOGLE_TOKEN_FILE = "token.json"
 
-OCR_API_KEY = "helloworld"  # безкоштовний ключ OCR.Space
+DAILY_LIMIT_DEFAULT = 12
+
+TOTAL_LIMIT = 999
+ADMIN_NOTIFY_AT = 100
+
+SCOPES = [
+    'https://www.googleapis.com/auth/drive.file',
+    'https://www.googleapis.com/auth/spreadsheets'
+]
+
+# =================================================
 
 app = Flask(__name__)
+
 viber = Api(BotConfiguration(
     name='Джексон🤖',
     avatar='https://raw.githubusercontent.com/ukiokirnos-source/viberbot/bea72a7878267cc513cdd87669f9eb6ee0faca50/free-icon-bot-4712106.png',
     auth_token=VIBER_TOKEN
 ))
 
-creds = Credentials.from_service_account_file(GOOGLE_CREDENTIALS_JSON, scopes=SCOPES)
+creds = Credentials.from_authorized_user_file(GOOGLE_TOKEN_FILE, SCOPES)
 drive = build('drive', 'v3', credentials=creds)
 sheets = build('sheets', 'v4', credentials=creds)
 
@@ -40,32 +55,8 @@ processed_tokens = set()
 processed_images = set()
 pending_reports = {}
 
-# ================== OCR через API ==================
-def process_ocr(img_bytes):
-    try:
-        r = requests.post(
-            "https://api.ocr.space/parse/image",
-            files={"file": img_bytes},
-            data={
-                "apikey": OCR_API_KEY,
-                "language": "ukr",
-                "isOverlayRequired": False
-            },
-            timeout=30
-        )
-        r.raise_for_status()
-        data = r.json()
-
-        if data.get("IsErroredOnProcessing"):
-            return []
-
-        text = data["ParsedResults"][0]["ParsedText"]
-        return [line.strip() for line in text.splitlines() if line.strip()]
-    except Exception as e:
-        print("OCR error:", e)
-        return []
-
 # ================== SHEETS ==================
+
 def get_users():
     res = sheets.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID,
@@ -96,7 +87,24 @@ def update_counter(row, value):
         body={"values": [[value]]}
     ).execute()
 
+def get_total_counter():
+    res = sheets.spreadsheets().values().get(
+        spreadsheetId=SPREADSHEET_ID,
+        range="Лист1!E1"
+    ).execute()
+    val = res.get("values", [["0"]])[0][0]
+    return int(val)
+
+def set_total_counter(val):
+    sheets.spreadsheets().values().update(
+        spreadsheetId=SPREADSHEET_ID,
+        range="Лист1!E1",
+        valueInputOption="RAW",
+        body={"values": [[val]]}
+    ).execute()
+
 # ================== DRIVE ==================
+
 def upload_photo(bytes_, name):
     media = MediaIoBaseUpload(io.BytesIO(bytes_), mimetype='image/jpeg')
     file = drive.files().create(
@@ -104,20 +112,23 @@ def upload_photo(bytes_, name):
         media_body=media,
         fields='id'
     ).execute()
+
     drive.permissions().create(
         fileId=file['id'],
         body={'type': 'anyone', 'role': 'reader'}
     ).execute()
+
     return f"https://drive.google.com/uc?id={file['id']}"
 
 # ================== MAIN ==================
+
 @app.route('/', methods=['POST'])
 def incoming():
     req = viber.parse_request(request.get_data())
 
     if isinstance(req, ViberConversationStartedRequest):
         viber.send_messages(req.user.id, [
-            TextMessage(text="Відправ фото — я зчитаю весь текст.")
+            TextMessage(text="Привіт! Відправ фото, а я відправлю штрих-код 😊")
         ])
         return Response(status=200)
 
@@ -132,7 +143,23 @@ def incoming():
         name = req.sender.name
 
         if hasattr(msg, 'media') and msg.media:
-            img = requests.get(msg.media, timeout=15).content
+
+            total_used = get_total_counter()
+
+            if total_used >= TOTAL_LIMIT:
+                viber.send_messages(user_id, [
+                    TextMessage(text="🚫 Глобальний ліміт 999 фото вичерпано. Бот тимчасово вимкнений.")
+                ])
+                return Response(status=200)
+
+            remaining = TOTAL_LIMIT - total_used
+            if remaining == ADMIN_NOTIFY_AT:
+                viber.send_messages(ADMIN_ID, [
+                    TextMessage(text=f"⚠️ До глобального ліміту 999 залишилось {remaining} фото.")
+                ])
+
+            img = requests.get(msg.media, timeout=10).content
+
             img_hash = hashlib.sha256(img).hexdigest()
             if img_hash in processed_images:
                 return Response(status=200)
@@ -148,19 +175,23 @@ def incoming():
 
             if used >= limit:
                 viber.send_messages(user_id, [
-                    TextMessage(text=f"🚫 Денний ліміт {limit} фото вичерпано.")
+                    TextMessage(text=f"🚫 Ліміт {limit} фото на сьогодні вичерпано.")
                 ])
                 return Response(status=200)
 
-            text_lines = process_ocr(img)
+            img64 = base64.b64encode(img).decode()
+            r = requests.post(WEB_APP_URL, json={"image": img64}, timeout=20)
+            barcodes = r.json().get("barcodes", [])
 
             update_counter(row, used + 1)
+            set_total_counter(total_used + 1)
 
-            result = "\n".join(text_lines) if text_lines else "❌ Текст не знайдено"
-            viber.send_messages(user_id, [TextMessage(text=result)])
+            text = "\n".join(barcodes) if barcodes else "❌ Штрихкодів не знайдено"
+            viber.send_messages(user_id, [TextMessage(text=text)])
 
             fname = f"photo_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
             url = upload_photo(img, fname)
+
             pending_reports[fname] = url
 
             viber.send_messages(user_id, [
@@ -181,7 +212,8 @@ def incoming():
                         }]
                     },
                     min_api_version=2
-                )
+                ),
+                TextMessage(text="──────────────\nГотово.\n──────────────")
             ])
 
         elif hasattr(msg, 'text') and msg.text.startswith("report_"):
@@ -192,7 +224,7 @@ def incoming():
                     PictureMessage(media=pending_reports[fname])
                 ])
                 viber.send_messages(user_id, [
-                    TextMessage(text="Скарга відправлена адміну.")
+                    TextMessage(text="Скарга відправлена адміну ✅")
                 ])
 
     return Response(status=200)
