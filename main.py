@@ -16,10 +16,11 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
+import easyocr  # <-- тут EasyOCR
+
 # ================== НАЛАШТУВАННЯ ==================
 VIBER_TOKEN = "4fdbb2493ae7ddc2-cd8869c327e2c592-60fd2dddaa295531"
 ADMIN_ID = "uJBIST3PYaJLoflfY/9zkQ=="
-WEB_APP_URL = "https://ocr-server-hb32.onrender.com/ocr"  # Твій Tesseract сервер
 SPREADSHEET_ID = "1W_fiI8FiwDn0sKq0ks7rGcWhXB0HEcHxar1uK4GL1P8"
 GDRIVE_FOLDER_ID = "1FteobWxkEUxPq1kBhUiP70a4-X0slbWe"
 GOOGLE_CREDENTIALS_JSON = "credentials.json"
@@ -40,6 +41,18 @@ sheets = build('sheets', 'v4', credentials=creds)
 processed_tokens = set()
 processed_images = set()
 pending_reports = {}
+
+# ================== EasyOCR ==================
+reader = easyocr.Reader(['uk', 'en'])  # українська + англійська
+
+def process_ocr(img_bytes):
+    try:
+        results = reader.readtext(img_bytes)
+        # повертаємо лише текст
+        return [res[1] for res in results]
+    except Exception as e:
+        print("OCR error:", e)
+        return []
 
 # ================== SHEETS ==================
 def get_users():
@@ -95,84 +108,13 @@ def upload_photo(bytes_, name):
     ).execute()
     return f"https://drive.google.com/uc?id={file['id']}"
 
-# ================== OCR ==================
-def process_ocr(img64):
-    try:
-        r = requests.post(WEB_APP_URL, json={"image": img64}, timeout=60)
-        r.raise_for_status()
-        return r.json().get("barcodes", [])
-    except Exception as e:
-        print("OCR error:", e)
-        return []
-
-# ================== БРОД ==================
-BREAD_KEYWORDS = {
-    '6897': "4823117504249", '6896': "4823117504232", '7581': "4823117506656"
-}
-
-def handle_bread(text):
-    text = text.lower()
-    barcodes = []
-    for k, v in BREAD_KEYWORDS.items():
-        if k in text:
-            barcodes.append(v)
-    return barcodes
-
-# ================== ОБРОБКА ФОТО В ПОТОЦІ ==================
-def process_photo_thread(user_id, img, row, data):
-    try:
-        limit = int(data[2])
-        used = int(data[3])
-        if used >= limit:
-            viber.send_messages(user_id, [TextMessage(text=f"🚫 Ліміт {limit} фото на сьогодні вичерпано.")])
-            return
-
-        img64 = base64.b64encode(img).decode()
-        text_barcodes = process_ocr(img64)
-
-        # Спец. хліб
-        if any(word in text_barcodes for word in ["полтава хліб", "київхліб"]):
-            text_barcodes.extend(handle_bread(" ".join(text_barcodes)))
-
-        update_counter(row, used + 1)
-        text = "\n".join(text_barcodes) if text_barcodes else "❌ Штрихкодів не знайдено"
-        viber.send_messages(user_id, [TextMessage(text=text)])
-
-        fname = f"photo_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
-        url = upload_photo(img, fname)
-        pending_reports[fname] = url
-
-        viber.send_messages(user_id, [
-            PictureMessage(media=url, text=""),
-            RichMediaMessage(
-                rich_media={
-                    "Type": "rich_media",
-                    "ButtonsGroupColumns": 6,
-                    "ButtonsGroupRows": 1,
-                    "Buttons": [{
-                        "Columns": 6,
-                        "Rows": 1,
-                        "ActionType": "reply",
-                        "ActionBody": f"report_{fname}",
-                        "Text": "⚠️ Скарга",
-                        "BgColor": "#ff4444",
-                        "TextColor": "#ffffff"
-                    }]
-                },
-                min_api_version=2
-            ),
-            TextMessage(text="──────────────\nГотово.\n──────────────")
-        ])
-    except Exception as e:
-        print("Photo thread error:", e)
-
 # ================== MAIN ==================
 @app.route('/', methods=['POST'])
 def incoming():
     req = viber.parse_request(request.get_data())
 
     if isinstance(req, ViberConversationStartedRequest):
-        viber.send_messages(req.user.id, [TextMessage(text="Привіт! Відправ фото, а я відправлю штрих-код 😊")])
+        viber.send_messages(req.user.id, [TextMessage(text="Привіт! Відправ фото, а я зчитаю текст 😊")])
         return Response(status=200)
 
     token = getattr(req, 'message_token', None)
@@ -194,9 +136,43 @@ def incoming():
             if not row:
                 add_user(user_id, name)
                 row, data = find_user(user_id)
+            limit = int(data[2])
+            used = int(data[3])
+            if used >= limit:
+                viber.send_messages(user_id, [TextMessage(text=f"🚫 Ліміт {limit} фото на сьогодні вичерпано.")])
+                return Response(status=200)
 
-            # Запускаємо обробку в окремому потоці
-            threading.Thread(target=process_photo_thread, args=(user_id, img, row, data)).start()
+            text_lines = process_ocr(img)
+
+            update_counter(row, used + 1)
+            text = "\n".join(text_lines) if text_lines else "❌ Текст не знайдено"
+            viber.send_messages(user_id, [TextMessage(text=text)])
+
+            fname = f"photo_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+            url = upload_photo(img, fname)
+            pending_reports[fname] = url
+
+            viber.send_messages(user_id, [
+                PictureMessage(media=url, text=""),
+                RichMediaMessage(
+                    rich_media={
+                        "Type": "rich_media",
+                        "ButtonsGroupColumns": 6,
+                        "ButtonsGroupRows": 1,
+                        "Buttons": [{
+                            "Columns": 6,
+                            "Rows": 1,
+                            "ActionType": "reply",
+                            "ActionBody": f"report_{fname}",
+                            "Text": "⚠️ Скарга",
+                            "BgColor": "#ff4444",
+                            "TextColor": "#ffffff"
+                        }]
+                    },
+                    min_api_version=2
+                ),
+                TextMessage(text="──────────────\nГотово.\n──────────────")
+            ])
 
         elif hasattr(msg, 'text') and msg.text.startswith("report_"):
             fname = msg.text.replace("report_", "")
