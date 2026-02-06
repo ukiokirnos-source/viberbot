@@ -3,6 +3,7 @@ import base64
 import requests
 import datetime
 import hashlib
+import re
 
 from flask import Flask, request, Response
 from viberbot import Api
@@ -19,7 +20,7 @@ from googleapiclient.http import MediaIoBaseUpload
 # ================== НАЛАШТУВАННЯ ==================
 
 VIBER_TOKEN = "4fdbb2493ae7ddc2-cd8869c327e2c592-60fd2dddaa295531"
-ADMIN_ID = "uJBIST3PYaJLoflfY/9zkQ=="
+ADMIN_ID = "uJBIST3PYaJLoflfY/9zkQ=="  # Має бути справжній Viber ID
 
 WEB_APP_URL = "https://script.google.com/macros/s/AKfycby4pDNg0fUyxmEV49ObZi3zwt131jEO_U39-E25-W9bK4Wk1crDkgqYqbliJBkVo26Srg/exec"
 
@@ -54,6 +55,21 @@ sheets = build('sheets', 'v4', credentials=creds)
 processed_tokens = set()
 processed_images = set()
 pending_reports = {}
+admin_notified = False  # прапорець, щоб не спамити адміну
+
+# ================== HELPERS ==================
+
+# Нормалізація штрихкодів
+def normalize_barcode(code):
+    if not code:
+        return None
+    code = code.upper().strip()
+    # Замінюємо ймовірні схожі символи
+    replacements = {'O':'0', 'I':'1', 'L':'1', 'S':'5', 'B':'8', 'Z':'2'}
+    code = ''.join(replacements.get(c, c) for c in code)
+    # Залишаємо тільки цифри
+    code = re.sub(r'[^0-9]', '', code)
+    return code if code else None
 
 # ================== SHEETS ==================
 
@@ -93,7 +109,10 @@ def get_total_counter():
         range="Лист1!E1"
     ).execute()
     val = res.get("values", [["0"]])[0][0]
-    return int(val)
+    try:
+        return int(val)
+    except:
+        return 0
 
 def set_total_counter(val):
     sheets.spreadsheets().values().update(
@@ -126,16 +145,25 @@ def upload_photo(bytes_, name):
 def incoming():
     req = viber.parse_request(request.get_data())
 
+    token = getattr(req, 'message_token', None)
+    if token in processed_tokens:
+        return Response(status=200)
+    processed_tokens.add(token)
+
+    total_used = get_total_counter()
+    if total_used >= TOTAL_LIMIT:
+        # глобальний ліміт вичерпано, бот не працює
+        if isinstance(req, ViberMessageRequest):
+            viber.send_messages(req.sender.id, [
+                TextMessage(text="🚫 Глобальний ліміт 999 фото вичерпано. Бот тимчасово вимкнений.")
+            ])
+        return Response(status=200)
+
     if isinstance(req, ViberConversationStartedRequest):
         viber.send_messages(req.user.id, [
             TextMessage(text="Привіт! Відправ фото, а я відправлю штрих-код 😊")
         ])
         return Response(status=200)
-
-    token = getattr(req, 'message_token', None)
-    if token in processed_tokens:
-        return Response(status=200)
-    processed_tokens.add(token)
 
     if isinstance(req, ViberMessageRequest):
         msg = req.message
@@ -144,19 +172,13 @@ def incoming():
 
         if hasattr(msg, 'media') and msg.media:
 
-            total_used = get_total_counter()
-
-            if total_used >= TOTAL_LIMIT:
-                viber.send_messages(user_id, [
-                    TextMessage(text="🚫 Глобальний ліміт 999 фото вичерпано. Бот тимчасово вимкнений.")
-                ])
-                return Response(status=200)
-
             remaining = TOTAL_LIMIT - total_used
-            if remaining == ADMIN_NOTIFY_AT:
+            global admin_notified
+            if remaining <= ADMIN_NOTIFY_AT and not admin_notified:
                 viber.send_messages(ADMIN_ID, [
                     TextMessage(text=f"⚠️ До глобального ліміту 999 залишилось {remaining} фото.")
                 ])
+                admin_notified = True
 
             img = requests.get(msg.media, timeout=10).content
 
@@ -179,9 +201,16 @@ def incoming():
                 ])
                 return Response(status=200)
 
+            # Обробка штрихкодів
             img64 = base64.b64encode(img).decode()
-            r = requests.post(WEB_APP_URL, json={"image": img64}, timeout=20)
-            barcodes = r.json().get("barcodes", [])
+            try:
+                r = requests.post(WEB_APP_URL, json={"image": img64}, timeout=20)
+                raw_barcodes = r.json().get("barcodes", [])
+                # нормалізуємо штрихкоди
+                barcodes = [normalize_barcode(b) for b in raw_barcodes]
+                barcodes = [b for b in barcodes if b]  # видаляємо None
+            except:
+                barcodes = []
 
             update_counter(row, used + 1)
             set_total_counter(total_used + 1)
