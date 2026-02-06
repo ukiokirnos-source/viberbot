@@ -1,10 +1,11 @@
 Flask
-requests==2.31.0
-google-api-python-client==2.101.0
-google-auth==2.22.0
-google-auth-httplib2==0.1.0
-easyocr==1.6.2
-torch==2.10.0
-torchvision==0.15.2
-gunicorn==21.2.0
+requests
+google-api-python-client
+google-auth
+google-auth-httplib2
+easyocr
+torch
+torchvision
+torchaudio
+gunicorn
 viberbot @ git+https://github.com/Viber/viber-bot-python.git#egg=viberbot
