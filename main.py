@@ -11,19 +11,29 @@ from viberbot.api.viber_requests import ViberMessageRequest, ViberConversationSt
 
 # ================== GOOGLE SHEET LOGGING ==================
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+import json
+import os
 import datetime
+from google.oauth2.service_account import Credentials
 
 FOLDER_ID = '1FteobWxkEUxPq1kBhUiP70a4-X0slbWe'
 SHEET_ID = '1W_fiI8FiwDn0sKq0ks7rGcWhXB0HEcHxar1uK4GL1P8'
 
-scope = ["https://spreadsheets.google.com/feeds",
-         "https://www.googleapis.com/auth/spreadsheets",
-         "https://www.googleapis.com/auth/drive.file",
-         "https://www.googleapis.com/auth/drive"]
+scope = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
 
-creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
-gc = gspread.authorize(creds)
+# ⬇️ ЧИТАЄМО З ENV
+creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
+
+if not creds_json:
+    raise RuntimeError("GOOGLE_CREDENTIALS_JSON env variable is missing")
+
+creds_dict = json.loads(creds_json)
+credentials = Credentials.from_service_account_info(creds_dict, scopes=scope)
+
+gc = gspread.authorize(credentials)
 sheet = gc.open_by_key(SHEET_ID)
 
 def logToSheet(message, user_id=None):
@@ -32,8 +42,10 @@ def logToSheet(message, user_id=None):
             sh = sheet.worksheet('Логи')
         except:
             sh = sheet.add_worksheet(title='Логи', rows="1000", cols="3")
+
         now = datetime.datetime.utcnow().isoformat()
         sh.append_row([now, user_id or "N/A", message])
+
     except Exception as e:
         print(f"LOG ERROR: {e}")
 
