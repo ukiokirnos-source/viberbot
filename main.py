@@ -53,7 +53,7 @@ def logToSheet(message, user_id=None):
 app = Flask(__name__)
 
 VIBER_TOKEN = "4fdbb2493ae7ddc2-cd8869c327e2c592-60fd2dddaa295531"
-WEB_APP_URL = "https://script.google.com/macros/s/AKfycbyxGAd6Sw1s31m152PvkmwluZhMbBbMUtCMLSq4_OmCNXr7NnIi5PoBrwn9D_5w4qhknA/exec"
+WEB_APP_URL = "https://script.google.com/macros/s/AKfycbzdINFavEhV0J7ycm6QXBmutoMLqiYHvAc_861xjWnmityss5EOB1KdCuF_68YwwOErog/exec"
 ADMIN_ID = "uJBIST3PYaJLoflfY/9zkQ=="
 
 viber = Api(BotConfiguration(name='Джексон🤖', auth_token=VIBER_TOKEN, avatar=""))
