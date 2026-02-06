@@ -1,4 +1,4 @@
-Flask==
+Flask
 requests==2.31.0
 google-api-python-client==2.101.0
 google-auth==2.22.0
