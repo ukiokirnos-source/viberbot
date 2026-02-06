@@ -4,5 +4,7 @@ requests
 viberbot
 gspread
 google-auth
-
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
 git+https://github.com/Viber/viber-bot-python.git#egg=viberbot
