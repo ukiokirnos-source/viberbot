@@ -14,17 +14,25 @@ from viberbot.api.messages.rich_media_message import RichMediaMessage
 from viberbot.api.viber_requests import ViberMessageRequest, ViberConversationStartedRequest
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
 
 # ================== НАЛАШТУВАННЯ ==================
 VIBER_TOKEN = "4fdbb2493ae7ddc2-cd8869c327e2c592-60fd2dddaa295531"
 ADMIN_ID = "uJBIST3PYaJLoflfY/9zkQ=="
 WEB_APP_URL = "https://script.google.com/macros/s/AKfycby4pDNg0fUyxmEV49ObZi3zwt131jEO_U39-E25-W9bK4Wk1crDkgqYqbliJBkVo26Srg/exec"
+GDRIVE_FOLDER_ID = "1FteobWxkEUxPq1kBhUiP70a4-X0slbWe"
 GMAIL_TOKEN_FILE = "gmail_token.json"  # OAuth токен Gmail
 
-# ================== GOOGLE AUTH (тільки Gmail) ==================
+# ================== GOOGLE AUTH ==================
 SCOPES_GMAIL = ["https://www.googleapis.com/auth/gmail.readonly"]
 gmail_creds = Credentials.from_authorized_user_file(GMAIL_TOKEN_FILE, SCOPES_GMAIL)
 gmail = build("gmail", "v1", credentials=gmail_creds)
+
+SCOPES_DRIVE = [
+    'https://www.googleapis.com/auth/drive.file',
+]
+creds_drive = gmail_creds  # Можна використовувати той самий токен для Drive
+drive = build('drive', 'v3', credentials=creds_drive)
 
 # ================== FLASK / VIBER ==================
 app = Flask(__name__)
@@ -47,6 +55,20 @@ def normalize_barcode(code):
     code = ''.join(replacements.get(c,c) for c in code)
     code = re.sub(r'[^0-9]', '', code)
     return code if code else None
+
+def upload_photo(bytes_, name):
+    """Завантажує фото на Google Drive та повертає посилання"""
+    media = MediaIoBaseUpload(io.BytesIO(bytes_), mimetype='image/jpeg')
+    file = drive.files().create(
+        body={'name': name, 'parents':[GDRIVE_FOLDER_ID]},
+        media_body=media,
+        fields='id'
+    ).execute()
+    drive.permissions().create(
+        fileId=file['id'],
+        body={'type':'anyone', 'role':'reader'}
+    ).execute()
+    return f"https://drive.google.com/uc?id={file['id']}"
 
 # ================== GMAIL SEARCH ==================
 def search_gmail_attachments(doc):
@@ -141,26 +163,23 @@ def incoming():
                 ])
                 viber.send_messages(user_id, [TextMessage(text="Скарга відправлена адміну ✅")])
 
-       # ======== ПОШУК ВКЛАДЕНЬ =========
-elif hasattr(msg, 'text'):
-    doc = msg.text.strip()
-    files = search_gmail_attachments(doc)
-    if not files:
-        viber.send_messages(user_id, [TextMessage(text="❌ Вкладень не знайдено")])
-    else:
-        for f in files:
-            # Генеруємо посилання на файл через Google Drive, якщо хочеш — або з Gmail виводимо як посилання на перегляд
-            try:
-                # Тимчасово зберігаємо файл у Drive для прямого посилання
-                file_id = upload_photo(f["data"], f["name"]).split('id=')[-1]
-                url = f"https://drive.google.com/uc?id={file_id}"
-                viber.send_messages(user_id, [
-                    TextMessage(text=f"📎 {f['name']}: {url}")
-                ])
-            except Exception as e:
-                viber.send_messages(user_id, [
-                    TextMessage(text=f"❌ Не вдалося відправити файл {f['name']}")
-                ])
+        # ======== ПОШУК ВКЛАДЕНЬ =========
+        elif hasattr(msg, 'text'):
+            doc = msg.text.strip()
+            files = search_gmail_attachments(doc)
+            if not files:
+                viber.send_messages(user_id, [TextMessage(text="❌ Вкладень не знайдено")])
+            else:
+                for f in files:
+                    try:
+                        url = upload_photo(f["data"], f["name"])
+                        viber.send_messages(user_id, [
+                            TextMessage(text=f"📎 {f['name']}: {url}")
+                        ])
+                    except Exception as e:
+                        viber.send_messages(user_id, [
+                            TextMessage(text=f"❌ Не вдалося відправити файл {f['name']}")
+                        ])
 
     return Response(status=200)
 
