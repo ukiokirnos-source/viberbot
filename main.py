@@ -1,12 +1,9 @@
 import io
-import os
-import json
 import base64
 import requests
 import datetime
 import hashlib
 import re
-
 from flask import Flask, request, Response
 from viberbot import Api
 from viberbot.api.bot_configuration import BotConfiguration
@@ -15,42 +12,22 @@ from viberbot.api.messages.picture_message import PictureMessage
 from viberbot.api.messages.file_message import FileMessage
 from viberbot.api.messages.rich_media_message import RichMediaMessage
 from viberbot.api.viber_requests import ViberMessageRequest, ViberConversationStartedRequest
-
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
 # ================== НАЛАШТУВАННЯ ==================
-
 VIBER_TOKEN = "4fdbb2493ae7ddc2-cd8869c327e2c592-60fd2dddaa295531"
 ADMIN_ID = "uJBIST3PYaJLoflfY/9zkQ=="
-
 WEB_APP_URL = "https://script.google.com/macros/s/AKfycby4pDNg0fUyxmEV49ObZi3zwt131jEO_U39-E25-W9bK4Wk1crDkgqYqbliJBkVo26Srg/exec"
-SPREADSHEET_ID = "1W_fiI8FiwDn0sKq0ks7rGcWhXB0HEcHxar1uK4GL1P8"
-
 GMAIL_TOKEN_FILE = "gmail_token.json"  # OAuth токен Gmail
 
-DAILY_LIMIT_DEFAULT = 12
-TOTAL_LIMIT = 999
-ADMIN_NOTIFY_AT = 100
-
 # ================== GOOGLE AUTH (тільки Gmail) ==================
-
-SCOPES_GMAIL = [
-    "https://www.googleapis.com/auth/gmail.readonly"
-]
-
-# OAuth Gmail токен
-gmail_creds = Credentials.from_authorized_user_file(
-    GMAIL_TOKEN_FILE,
-    SCOPES_GMAIL
-)
-
+SCOPES_GMAIL = ["https://www.googleapis.com/auth/gmail.readonly"]
+gmail_creds = Credentials.from_authorized_user_file(GMAIL_TOKEN_FILE, SCOPES_GMAIL)
 gmail = build("gmail", "v1", credentials=gmail_creds)
 
 # ================== FLASK / VIBER ==================
-
 app = Flask(__name__)
-
 viber = Api(BotConfiguration(
     name='Джексон🤖',
     avatar='https://raw.githubusercontent.com/ukiokirnos-source/viberbot/bea72a7878267cc513cdd87669f9eb6ee0faca50/free-icon-bot-4712106.png',
@@ -60,10 +37,8 @@ viber = Api(BotConfiguration(
 processed_tokens = set()
 processed_images = set()
 pending_reports = {}
-admin_notified = False
 
 # ================== HELPERS ==================
-
 def normalize_barcode(code):
     if not code:
         return None
@@ -74,7 +49,6 @@ def normalize_barcode(code):
     return code if code else None
 
 # ================== GMAIL SEARCH ==================
-
 def search_gmail_attachments(doc):
     query = f"filename:{doc} newer_than:14d"
     res = gmail.users().messages().list(userId="me", q=query).execute()
@@ -92,13 +66,10 @@ def search_gmail_attachments(doc):
                         userId="me", messageId=m["id"], id=att_id
                     ).execute()
                     data = base64.urlsafe_b64decode(att["data"])
-                    # Замість завантаження на Google Drive просто робимо посилання "внутрішній файл"
-                    # Тут можна зберігати тимчасово, але краще просто відправити користувачу як base64
                     files.append({"name": filename, "data": data})
     return files
 
 # ================== MAIN ==================
-
 @app.route('/', methods=['POST'])
 def incoming():
     req = viber.parse_request(request.get_data())
@@ -108,9 +79,7 @@ def incoming():
     processed_tokens.add(token)
 
     if isinstance(req, ViberConversationStartedRequest):
-        viber.send_messages(req.user.id, [
-            TextMessage(text="Привіт! Відправ фото або номер документа.")
-        ])
+        viber.send_messages(req.user.id, [TextMessage(text="Привіт! Відправ фото або номер документа.")])
         return Response(status=200)
 
     if isinstance(req, ViberMessageRequest):
@@ -136,7 +105,31 @@ def incoming():
 
             text = "\n".join(barcodes) if barcodes else "❌ Штрихкодів не знайдено"
             viber.send_messages(user_id, [TextMessage(text=text)])
-            viber.send_messages(user_id, [PictureMessage(media=msg.media, text="")])
+
+            fname = f"photo_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+            pending_reports[fname] = msg.media
+
+            viber.send_messages(user_id, [
+                PictureMessage(media=msg.media, text=""),
+                RichMediaMessage(
+                    rich_media={
+                        "Type":"rich_media",
+                        "ButtonsGroupColumns":6,
+                        "ButtonsGroupRows":1,
+                        "Buttons":[{
+                            "Columns":6,
+                            "Rows":1,
+                            "ActionType":"reply",
+                            "ActionBody":f"report_{fname}",
+                            "Text":"⚠️ Скарга",
+                            "BgColor":"#ff4444",
+                            "TextColor":"#ffffff"
+                        }]
+                    },
+                    min_api_version=2
+                ),
+                TextMessage(text="──────────────\nГотово.\n──────────────")
+            ])
 
         # ======== СКАРГИ =========
         elif hasattr(msg, 'text') and msg.text.startswith("report_"):
@@ -146,25 +139,28 @@ def incoming():
                     TextMessage(text=f"⚠️ Скарга від {user_id}"),
                     PictureMessage(media=pending_reports[fname])
                 ])
-                viber.send_messages(user_id, [
-                    TextMessage(text="Скарга відправлена адміну ✅")
-                ])
+                viber.send_messages(user_id, [TextMessage(text="Скарга відправлена адміну ✅")])
 
-        # ======== ПОШУК ВКЛАДЕНЬ =========
-        elif hasattr(msg, 'text'):
-            doc = msg.text.strip()
-            files = search_gmail_attachments(doc)
-            if not files:
-                viber.send_messages(user_id, [TextMessage(text="❌ Вкладень не знайдено")])
-            else:
-                for f in files:
-                    # Відправляємо користувачу як тимчасовий файл
-                    viber.send_messages(user_id, [
-                        TextMessage(text=f"📎 {f['name']}"),
-                        FileMessage(media="data:application/octet-stream;base64," + base64.b64encode(f["data"]).decode(),
-                                    size=len(f["data"]),
-                                    file_name=f["name"])
-                    ])
+       # ======== ПОШУК ВКЛАДЕНЬ =========
+elif hasattr(msg, 'text'):
+    doc = msg.text.strip()
+    files = search_gmail_attachments(doc)
+    if not files:
+        viber.send_messages(user_id, [TextMessage(text="❌ Вкладень не знайдено")])
+    else:
+        for f in files:
+            # Генеруємо посилання на файл через Google Drive, якщо хочеш — або з Gmail виводимо як посилання на перегляд
+            try:
+                # Тимчасово зберігаємо файл у Drive для прямого посилання
+                file_id = upload_photo(f["data"], f["name"]).split('id=')[-1]
+                url = f"https://drive.google.com/uc?id={file_id}"
+                viber.send_messages(user_id, [
+                    TextMessage(text=f"📎 {f['name']}: {url}")
+                ])
+            except Exception as e:
+                viber.send_messages(user_id, [
+                    TextMessage(text=f"❌ Не вдалося відправити файл {f['name']}")
+                ])
 
     return Response(status=200)
 
