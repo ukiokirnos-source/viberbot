@@ -1,4 +1,6 @@
 import io
+import os
+import json
 import base64
 import requests
 import datetime
@@ -28,8 +30,7 @@ WEB_APP_URL = "https://script.google.com/macros/s/AKfycby4pDNg0fUyxmEV49ObZi3zwt
 SPREADSHEET_ID = "1W_fiI8FiwDn0sKq0ks7rGcWhXB0HEcHxar1uK4GL1P8"
 GDRIVE_FOLDER_ID = "1FteobWxkEUxPq1kBhUiP70a4-X0slbWe"
 
-SERVICE_FILE = "token.json"       # сервісний акаунт
-GMAIL_TOKEN_FILE = "gmail_token.json"  # OAuth токен
+GMAIL_TOKEN_FILE = "gmail_token.json"  # OAuth токен Gmail
 
 DAILY_LIMIT_DEFAULT = 12
 TOTAL_LIMIT = 999
@@ -46,11 +47,16 @@ SCOPES_GMAIL = [
     "https://www.googleapis.com/auth/gmail.readonly"
 ]
 
-service_creds = service_account.Credentials.from_service_account_file(
-    SERVICE_FILE,
+# Сервісний акаунт з ENV
+SERVICE_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON")
+if not SERVICE_JSON:
+    raise Exception("Не знайдено ENV змінну GOOGLE_CREDENTIALS_JSON")
+service_creds = service_account.Credentials.from_service_account_info(
+    json.loads(SERVICE_JSON),
     scopes=SCOPES_SERVICE
 )
 
+# OAuth Gmail токен
 gmail_creds = Credentials.from_authorized_user_file(
     GMAIL_TOKEN_FILE,
     SCOPES_GMAIL
