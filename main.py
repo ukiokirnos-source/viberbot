@@ -141,18 +141,31 @@ def incoming():
                 ])
                 viber.send_messages(user_id, [TextMessage(text="Скарга відправлена адміну ✅")])
 
-        # ======== ПОШУК ВКЛАДЕНЬ =========
-        elif hasattr(msg, 'text'):
-            doc = msg.text.strip()
-            files = search_gmail_attachments(doc)
-            if not files:
-                viber.send_messages(user_id, [TextMessage(text="❌ Вкладень не знайдено")])
-            else:
-                for f in files:
-                    viber.send_messages(user_id, [
-                        FileMessage(media="data:application/octet-stream;base64," + base64.b64encode(f["data"]).decode(),
-                                    file_name=f["name"])
-                    ])
+       # ======== ПОШУК ВКЛАДЕНЬ =========
+elif hasattr(msg, 'text'):
+    doc = msg.text.strip()
+    files = search_gmail_attachments(doc)
+    if not files:
+        viber.send_messages(user_id, [TextMessage(text="❌ Вкладень не знайдено")])
+    else:
+        for f in files:
+            try:
+                # Завантажуємо файл на Google Drive
+                media = MediaIoBaseUpload(io.BytesIO(f["data"]), mimetype='application/octet-stream')
+                file_drive = drive.files().create(
+                    body={'name': f["name"], 'parents':[GDRIVE_FOLDER_ID]},
+                    media_body=media,
+                    fields='id'
+                ).execute()
+                # Додаємо доступ "читати для всіх"
+                drive.permissions().create(
+                    fileId=file_drive['id'],
+                    body={'type':'anyone','role':'reader'}
+                ).execute()
+                url = f"https://drive.google.com/uc?id={file_drive['id']}"
+                viber.send_messages(user_id, [TextMessage(text=f"📎 {f['name']}: {url}")])
+            except Exception as e:
+                viber.send_messages(user_id, [TextMessage(text=f"❌ Не вдалося відправити файл {f['name']}")])
 
     return Response(status=200)
 
