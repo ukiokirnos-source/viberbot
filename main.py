@@ -22,14 +22,14 @@ from googleapiclient.http import MediaIoBaseUpload
 # ================== НАЛАШТУВАННЯ ==================
 
 VIBER_TOKEN = "4fdbb2493ae7ddc2-cd8869c327e2c592-60fd2dddaa295531"
-ADMIN_ID = "uJBIST3PYaJLoflfY/9zkQ=="  # Має бути справжній Viber ID
+ADMIN_ID = "uJBIST3PYaJLoflfY/9zkQ=="
 
 WEB_APP_URL = "https://script.google.com/macros/s/AKfycby4pDNg0fUyxmEV49ObZi3zwt131jEO_U39-E25-W9bK4Wk1crDkgqYqbliJBkVo26Srg/exec"
 SPREADSHEET_ID = "1W_fiI8FiwDn0sKq0ks7rGcWhXB0HEcHxar1uK4GL1P8"
 GDRIVE_FOLDER_ID = "1FteobWxkEUxPq1kBhUiP70a4-X0slbWe"
 
-SERVICE_FILE = "token.json"
-GMAIL_TOKEN_FILE = "gmail_token.json"
+SERVICE_FILE = "token.json"       # сервісний акаунт
+GMAIL_TOKEN_FILE = "gmail_token.json"  # OAuth токен
 
 DAILY_LIMIT_DEFAULT = 12
 TOTAL_LIMIT = 999
@@ -73,7 +73,7 @@ viber = Api(BotConfiguration(
 processed_tokens = set()
 processed_images = set()
 pending_reports = {}
-admin_notified = False  # прапорець, щоб не спамити адміну
+admin_notified = False
 
 # ================== HELPERS ==================
 
@@ -142,7 +142,7 @@ def set_total_counter(val):
 def upload_photo(bytes_, name):
     media = MediaIoBaseUpload(io.BytesIO(bytes_), mimetype='image/jpeg')
     file = drive.files().create(
-        body={'name': name, 'parents':[GDRIVE_FOLDER_ID]},
+        body={'name': name,'parents':[GDRIVE_FOLDER_ID]},
         media_body=media,
         fields='id'
     ).execute()
@@ -286,7 +286,7 @@ def incoming():
                     TextMessage(text="Скарга відправлена адміну ✅")
                 ])
 
-        # ======== Пошук вкладень =========
+        # ======== ПОШУК ВКЛАДЕНЬ =========
         elif hasattr(msg, 'text'):
             doc = msg.text.strip()
             files = search_gmail_attachments(doc)
