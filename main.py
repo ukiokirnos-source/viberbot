@@ -9,22 +9,27 @@ from viberbot import Api
 from viberbot.api.bot_configuration import BotConfiguration
 from viberbot.api.messages.text_message import TextMessage
 from viberbot.api.messages.picture_message import PictureMessage
-from viberbot.api.messages.file_message import FileMessage
 from viberbot.api.messages.rich_media_message import RichMediaMessage
 from viberbot.api.viber_requests import ViberMessageRequest, ViberConversationStartedRequest
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
 
 # ================== НАЛАШТУВАННЯ ==================
 VIBER_TOKEN = "4fdbb2493ae7ddc2-cd8869c327e2c592-60fd2dddaa295531"
 ADMIN_ID = "uJBIST3PYaJLoflfY/9zkQ=="
 WEB_APP_URL = "https://script.google.com/macros/s/AKfycby4pDNg0fUyxmEV49ObZi3zwt131jEO_U39-E25-W9bK4Wk1crDkgqYqbliJBkVo26Srg/exec"
-GMAIL_TOKEN_FILE = "gmail_token.json"  # OAuth токен Gmail
+GMAIL_TOKEN_FILE = "gmail_token.json"
+GDRIVE_FOLDER_ID = "1FteobWxkEUxPq1kBhUiP70a4-X0slbWe"
 
-# ================== GOOGLE AUTH (тільки Gmail) ==================
+# ================== GOOGLE AUTH ==================
 SCOPES_GMAIL = ["https://www.googleapis.com/auth/gmail.readonly"]
 gmail_creds = Credentials.from_authorized_user_file(GMAIL_TOKEN_FILE, SCOPES_GMAIL)
 gmail = build("gmail", "v1", credentials=gmail_creds)
+
+SCOPES_DRIVE = ['https://www.googleapis.com/auth/drive.file']
+drive_creds = Credentials.from_authorized_user_file(GMAIL_TOKEN_FILE, SCOPES_DRIVE)
+drive = build('drive', 'v3', credentials=drive_creds)
 
 # ================== FLASK / VIBER ==================
 app = Flask(__name__)
@@ -85,9 +90,8 @@ def incoming():
     if isinstance(req, ViberMessageRequest):
         msg = req.message
         user_id = req.sender.id
-        name = req.sender.name
 
-        # ======== ФОТО =========
+        # ================== ФОТО ==================
         if hasattr(msg, 'media') and msg.media:
             img = requests.get(msg.media, timeout=10).content
             img_hash = hashlib.sha256(img).hexdigest()
@@ -98,8 +102,7 @@ def incoming():
             try:
                 r = requests.post(WEB_APP_URL, json={"image": base64.b64encode(img).decode()}, timeout=20)
                 raw_barcodes = r.json().get("barcodes", [])
-                barcodes = [normalize_barcode(b) for b in raw_barcodes]
-                barcodes = [b for b in barcodes if b]
+                barcodes = [normalize_barcode(b) for b in raw_barcodes if normalize_barcode(b)]
             except:
                 barcodes = []
 
@@ -131,7 +134,7 @@ def incoming():
                 TextMessage(text="──────────────\nГотово.\n──────────────")
             ])
 
-        # ======== СКАРГИ =========
+        # ================== СКАРГИ ==================
         elif hasattr(msg, 'text') and msg.text.startswith("report_"):
             fname = msg.text.replace("report_", "")
             if fname in pending_reports:
@@ -141,31 +144,29 @@ def incoming():
                 ])
                 viber.send_messages(user_id, [TextMessage(text="Скарга відправлена адміну ✅")])
 
-       # ======== ПОШУК ВКЛАДЕНЬ =========
-elif hasattr(msg, 'text'):
-    doc = msg.text.strip()
-    files = search_gmail_attachments(doc)
-    if not files:
-        viber.send_messages(user_id, [TextMessage(text="❌ Вкладень не знайдено")])
-    else:
-        for f in files:
-            try:
-                # Завантажуємо файл на Google Drive
-                media = MediaIoBaseUpload(io.BytesIO(f["data"]), mimetype='application/octet-stream')
-                file_drive = drive.files().create(
-                    body={'name': f["name"], 'parents':[GDRIVE_FOLDER_ID]},
-                    media_body=media,
-                    fields='id'
-                ).execute()
-                # Додаємо доступ "читати для всіх"
-                drive.permissions().create(
-                    fileId=file_drive['id'],
-                    body={'type':'anyone','role':'reader'}
-                ).execute()
-                url = f"https://drive.google.com/uc?id={file_drive['id']}"
-                viber.send_messages(user_id, [TextMessage(text=f"📎 {f['name']}: {url}")])
-            except Exception as e:
-                viber.send_messages(user_id, [TextMessage(text=f"❌ Не вдалося відправити файл {f['name']}")])
+        # ================== ПОШУК ВКЛАДЕНЬ ==================
+        elif hasattr(msg, 'text'):
+            doc = msg.text.strip()
+            files = search_gmail_attachments(doc)
+            if not files:
+                viber.send_messages(user_id, [TextMessage(text="❌ Вкладень не знайдено")])
+            else:
+                for f in files:
+                    try:
+                        media = MediaIoBaseUpload(io.BytesIO(f["data"]), mimetype='application/octet-stream')
+                        file_drive = drive.files().create(
+                            body={'name': f["name"], 'parents':[GDRIVE_FOLDER_ID]},
+                            media_body=media,
+                            fields='id'
+                        ).execute()
+                        drive.permissions().create(
+                            fileId=file_drive['id'],
+                            body={'type':'anyone','role':'reader'}
+                        ).execute()
+                        url = f"https://drive.google.com/uc?id={file_drive['id']}"
+                        viber.send_messages(user_id, [TextMessage(text=f"📎 {f['name']}: {url}")])
+                    except:
+                        viber.send_messages(user_id, [TextMessage(text=f"❌ Не вдалося відправити файл {f['name']}")])
 
     return Response(status=200)
 
