@@ -5,3 +5,7 @@ google-api-python-client
 google-auth
 google-auth-httplib2
 gunicorn
+google-auth-oauthlib
+httplib2
+oauthlib
+certifi
