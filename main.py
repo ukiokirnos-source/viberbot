@@ -19,7 +19,6 @@ ADMIN_PHONE = "380661153200"
 WEB_APP_URL = "https://script.google.com/macros/s/AKfycbz5dCoxPzCC_GdDDCEsjZQtRwW74rqVvaPpp0Uwj7ioD5DRy9--An-4aiqgJNzWKktKJA/exec"
 GMAIL_TOKEN_FILE = "gmail_token.json"
 GDRIVE_FOLDER_ID = "1FteobWxkEUxPq1kBhUiP70a4-X0slbWe"
-SPREADSHEET_ID = "1W_fiI8FiwDn0sKq0ks7rGcWhXB0HEcHxar1uK4GL1P8"
 
 # ================== INIT ==================
 app = Flask(__name__)
@@ -30,42 +29,65 @@ drive = build("drive", "v3", credentials=Credentials.from_authorized_user_file(G
 pending_reports = {}
 
 # ================== HELPERS ==================
+def normalize_barcode(code):
+    if not code:
+        return None
+    code = re.sub(r'[^0-9]', '', str(code))
+    return code if code else None
+
+
+def search_gmail_attachments(doc):
+    query = f"{doc} newer_than:14d"
+    res = gmail.users().messages().list(userId="me", q=query).execute()
+    messages = res.get("messages", [])
+
+    files = []
+
+    for m in messages:
+        msg = gmail.users().messages().get(userId="me", id=m["id"]).execute()
+
+        parts = msg["payload"].get("parts", [])
+
+        for p in parts:
+            filename = p.get("filename")
+            if filename and doc in filename:
+                att_id = p["body"].get("attachmentId")
+                if att_id:
+                    att = gmail.users().messages().attachments().get(
+                        userId="me", messageId=m["id"], id=att_id
+                    ).execute()
+
+                    data = base64.urlsafe_b64decode(att["data"])
+                    files.append({"name": filename, "data": data})
+
+    return files
+
+
 def send_text(phone, text):
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
-    headers = {
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    data = {
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+    requests.post(url, headers=headers, json={
         "messaging_product": "whatsapp",
         "to": phone,
         "type": "text",
         "text": {"body": text}
-    }
-    requests.post(url, headers=headers, json=data)
+    })
 
 
 def send_image(phone, image_url):
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
-    headers = {
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    data = {
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+    requests.post(url, headers=headers, json={
         "messaging_product": "whatsapp",
         "to": phone,
         "type": "image",
         "image": {"link": image_url}
-    }
-    requests.post(url, headers=headers, json=data)
+    })
 
 
 def send_report_button(phone, fname):
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
-    headers = {
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type": "application/json"
-    }
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
 
     data = {
         "messaging_product": "whatsapp",
@@ -73,9 +95,7 @@ def send_report_button(phone, fname):
         "type": "interactive",
         "interactive": {
             "type": "button",
-            "body": {
-                "text": "Є проблема з фото?"
-            },
+            "body": {"text": "Є проблема з фото?"},
             "action": {
                 "buttons": [
                     {
@@ -109,6 +129,14 @@ def upload_photo(bytes_, name):
     return f"https://drive.google.com/uc?id={file['id']}"
 
 
+# ================== WEBHOOK ==================
+@app.route("/webhook", methods=["GET"])
+def verify():
+    if request.args.get("hub.verify_token") == VERIFY_TOKEN:
+        return request.args.get("hub.challenge")
+    return "error", 403
+
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.get_json()
@@ -123,7 +151,7 @@ def webhook():
         msg = messages[0]
         phone = msg["from"]
 
-        # ================== ФОТО ==================
+        # ================== IMAGE ==================
         if msg["type"] == "image":
 
             media_id = msg["image"]["id"]
@@ -138,57 +166,42 @@ def webhook():
                 headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
             ).content
 
-            # ===== ШТРИХКОД =====
+            # ===== BARCODE =====
             try:
-                r = requests.post(
-                    WEB_APP_URL,
-                    json={"image": base64.b64encode(img).decode()},
-                    timeout=20
-                )
-
-                print("BARCODE RAW:", r.text)
+                r = requests.post(WEB_APP_URL, json={"image": base64.b64encode(img).decode()}, timeout=20)
 
                 try:
                     data_bc = r.json()
                 except:
                     data_bc = {}
 
-                raw = (
-                    data_bc.get("barcodes")
-                    or data_bc.get("result")
-                    or []
-                )
+                raw = data_bc.get("barcodes", []) or data_bc.get("result", [])
 
                 barcodes = [normalize_barcode(b) for b in raw if normalize_barcode(b)]
 
-            except Exception as e:
-                print("BARCODE ERROR:", e)
+            except:
                 barcodes = []
 
-            # ВІДПОВІДЬ
-            text = "\n".join(barcodes) if barcodes else "❌ Штрихкодів не знайдено"
-            send_text(phone, text)
+            # 1. штрихкоди
+            send_text(phone, "\n".join(barcodes) if barcodes else "❌ Штрихкодів не знайдено")
 
-            # upload
+            # 2. фото
             fname = f"photo_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
             url = upload_photo(img, fname)
-
             pending_reports[fname] = url
-
             send_image(phone, url)
 
-            # КНОПКА (ОСТАННЯ ПЕРЕД ГОТОВО)
+            # 3. кнопка
             send_report_button(phone, fname)
 
+            # 4. готово
             send_text(phone, "------ ГОТОВО ------")
 
-        # ================== ТЕКСТ ==================
+        # ================== TEXT ==================
         elif msg["type"] == "text":
 
             text = msg["text"]["body"].strip()
-            print("TEXT:", text)
 
-            # ===== СКАРГА =====
             if text.startswith("report_"):
                 fname = text.replace("report_", "")
 
@@ -198,83 +211,33 @@ def webhook():
 
                 send_text(phone, "Скарга відправлена ✅")
 
-            # ===== GMAIL ПОШУК =====
             else:
-                doc = text
-
-                print("SEARCHING GMAIL FOR:", doc)
-
-                files = search_gmail_attachments(doc)
+                files = search_gmail_attachments(text)
 
                 if not files:
                     send_text(phone, "❌ Вкладень не знайдено")
                 else:
                     for f in files:
-                        try:
-                            media = MediaIoBaseUpload(
-                                io.BytesIO(f["data"]),
-                                mimetype='application/octet-stream'
-                            )
+                        media = MediaIoBaseUpload(io.BytesIO(f["data"]), mimetype='application/octet-stream')
 
-                            file_drive = drive.files().create(
-                                body={'name': f["name"], 'parents': [GDRIVE_FOLDER_ID]},
-                                media_body=media,
-                                fields='id'
-                            ).execute()
+                        file_drive = drive.files().create(
+                            body={'name': f["name"], 'parents': [GDRIVE_FOLDER_ID]},
+                            media_body=media,
+                            fields='id'
+                        ).execute()
 
-                            drive.permissions().create(
-                                fileId=file_drive['id'],
-                                body={'type': 'anyone', 'role': 'reader'}
-                            ).execute()
+                        drive.permissions().create(
+                            fileId=file_drive['id'],
+                            body={'type': 'anyone', 'role': 'reader'}
+                        ).execute()
 
-                            url = f"https://drive.google.com/uc?id={file_drive['id']}"
-
-                            send_text(phone, f"📎 {f['name']}: {url}")
-
-                        except Exception as e:
-                            print("DRIVE ERROR:", e)
+                        url = f"https://drive.google.com/uc?id={file_drive['id']}"
+                        send_text(phone, f"📎 {f['name']}: {url}")
 
     except Exception as e:
-        print("WEBHOOK ERROR:", e)
+        print("ERROR:", e)
 
     return "ok", 200
-
-# ================== BUTTON HANDLER ==================
-@app.route("/webhook", methods=["POST"])
-def buttons():
-    data = request.get_json()
-
-    try:
-        entry = data["entry"][0]["changes"][0]["value"]
-        messages = entry.get("messages")
-
-        if not messages:
-            return "ok", 200
-
-        msg = messages[0]
-        phone = msg["from"]
-
-        if msg["type"] == "interactive":
-            button_id = msg["interactive"]["button_reply"]["id"]
-
-            if button_id.startswith("report_"):
-                fname = button_id.replace("report_", "")
-
-                if fname in pending_reports:
-                    send_text(ADMIN_PHONE, f"⚠️ Скарга від {phone}")
-                    send_image(ADMIN_PHONE, pending_reports[fname])
-
-                send_text(phone, "Скарга відправлена ✅")
-
-    except:
-        pass
-
-    return "ok", 200
-
-
-# ================== RUN ==================
-if __name__ == "__main__":
-    app.run(port=5000)
 
 
 # ================== RUN ==================
