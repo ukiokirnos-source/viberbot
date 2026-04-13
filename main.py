@@ -150,6 +150,18 @@ def upload_photo(bytes_, name):
     return f"https://drive.google.com/uc?id={file['id']}"
 
 
+def safe_media_url(media_id):
+    try:
+        r = requests.get(
+            f"https://graph.facebook.com/v18.0/{media_id}",
+            headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+        )
+        j = r.json()
+        return j.get("url")
+    except:
+        return None
+
+
 # ================== SHEETS ==================
 def get_user(phone):
     rows = sheets.spreadsheets().values().get(
@@ -180,40 +192,6 @@ def update_used(row, value):
         body={"values": [[value]]}
     ).execute()
 
-
-def update_total(val):
-    sheets.spreadsheets().values().update(
-        spreadsheetId=SPREADSHEET_ID,
-        range="Лист1!E2",
-        valueInputOption="RAW",
-        body={"values": [[val]]}
-    ).execute()
-
-
-def reset_daily():
-    while True:
-        now = datetime.datetime.now()
-        seconds = ((24 - now.hour - 1) * 3600) + ((60 - now.minute - 1) * 60)
-        time.sleep(seconds)
-
-        try:
-            rows = sheets.spreadsheets().values().get(
-                spreadsheetId=SPREADSHEET_ID,
-                range="Лист1!D2:D"
-            ).execute().get("values", [])
-
-            for i in range(len(rows)):
-                sheets.spreadsheets().values().update(
-                    spreadsheetId=SPREADSHEET_ID,
-                    range=f"Лист1!D{i+2}",
-                    valueInputOption="RAW",
-                    body={"values": [[0]]}
-                ).execute()
-        except:
-            pass
-
-
-threading.Thread(target=reset_daily, daemon=True).start()
 
 # ================== WEBHOOK ==================
 @app.route("/webhook", methods=["POST"])
@@ -247,11 +225,11 @@ def webhook():
                 return "ok", 200
 
             media_id = msg["image"]["id"]
+            media_url = safe_media_url(media_id)
 
-            media_url = requests.get(
-                f"https://graph.facebook.com/v18.0/{media_id}",
-                headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
-            ).json()["url"]
+            if not media_url:
+                send_text(phone, "❌ Помилка медіа")
+                return "ok", 200
 
             img = requests.get(media_url, headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}).content
 
@@ -274,7 +252,7 @@ def webhook():
             send_text(phone, "------ ГОТОВО ------")
 
             update_used(row, used + 1)
-            global total_counter
+
             total_counter += 1
 
         # ================== TEXT ==================
