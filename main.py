@@ -148,21 +148,7 @@ def upload_photo(bytes_, name):
 
     return f"https://drive.google.com/uc?id={file['id']}"
 
-
-# ================== SAFE MEDIA GET (FIX) ==================
-def get_media_url(media_id):
-    try:
-        r = requests.get(
-            f"https://graph.facebook.com/v18.0/{media_id}",
-            headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
-        ).json()
-
-        return r.get("url")
-    except:
-        return None
-
-
-# ================== SHEETS ==================
+# ================== SHEETS SAFE ==================
 def get_user(phone):
     rows = sheets.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID,
@@ -192,46 +178,12 @@ def update_used(row, value):
         body={"values": [[value]]}
     ).execute()
 
-
-def update_total(val):
-    sheets.spreadsheets().values().update(
-        spreadsheetId=SPREADSHEET_ID,
-        range="Лист1!E2",
-        valueInputOption="RAW",
-        body={"values": [[val]]}
-    ).execute()
-
-
-# ================== RESET DAILY ==================
-def reset_daily():
-    while True:
-        now = datetime.datetime.now()
-        seconds = ((24 - now.hour - 1) * 3600) + ((60 - now.minute - 1) * 60)
-        time.sleep(seconds)
-
-        try:
-            rows = sheets.spreadsheets().values().get(
-                spreadsheetId=SPREADSHEET_ID,
-                range="Лист1!D2:D"
-            ).execute().get("values", [])
-
-            for i in range(len(rows)):
-                sheets.spreadsheets().values().update(
-                    spreadsheetId=SPREADSHEET_ID,
-                    range=f"Лист1!D{i+2}",
-                    valueInputOption="RAW",
-                    body={"values": [[0]]}
-                ).execute()
-        except:
-            pass
-
-threading.Thread(target=reset_daily, daemon=True).start()
-
-
 # ================== WEBHOOK ==================
 @app.route("/webhook", methods=["GET", "POST"])
 def webhook():
-    data = request.get_json()
+    data = request.get_json(silent=True)
+    if not data:
+        return "ok", 200
 
     try:
         entry = data["entry"][0]["changes"][0]["value"]
@@ -243,11 +195,11 @@ def webhook():
         msg = messages[0]
         phone = msg["from"]
 
-        name = phone
+        # SAFE NAME
         try:
             name = entry["contacts"][0]["profile"]["name"]
         except:
-            pass
+            name = phone
 
         # ================== IMAGE ==================
         if msg["type"] == "image":
@@ -258,8 +210,8 @@ def webhook():
                 create_user(phone, name)
                 row, user = get_user(phone)
 
-            limit = int(user[2]) if len(user) > 2 else 999
-            used = int(user[3]) if len(user) > 3 else 0
+            limit = int(user[2]) if len(user) > 2 and str(user[2]).isdigit() else 999
+            used = int(user[3]) if len(user) > 3 and str(user[3]).isdigit() else 0
 
             if used >= limit:
                 send_text(phone, "🚫 Ліміт вичерпано")
@@ -267,10 +219,16 @@ def webhook():
 
             media_id = msg["image"]["id"]
 
-            media_url = get_media_url(media_id)
-            if not media_url:
-                print("MEDIA ERROR:", media_id)
+            media_resp = requests.get(
+                f"https://graph.facebook.com/v18.0/{media_id}",
+                headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+            ).json()
+
+            if "url" not in media_resp:
+                print("MEDIA ERROR:", media_resp)
                 return "ok", 200
+
+            media_url = media_resp["url"]
 
             img = requests.get(
                 media_url,
@@ -286,18 +244,13 @@ def webhook():
                 barcodes = []
 
             send_text(phone, "\n".join(barcodes) if barcodes else "❌ Штрихкодів не знайдено")
-            time.sleep(0.3)
 
             fname = f"photo_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
             url = upload_photo(img, fname)
             pending_reports[fname] = url
 
             send_image(phone, url)
-            time.sleep(0.3)
-
             send_report_button(phone, fname)
-            time.sleep(0.3)
-
             send_text(phone, "------ ГОТОВО ------")
 
             update_used(row, used + 1)
@@ -305,9 +258,13 @@ def webhook():
         # ================== TEXT ==================
         elif msg["type"] in ["text", "interactive"]:
 
-            payload = msg["text"]["body"] if msg["type"] == "text" else msg["interactive"]["button_reply"]["id"]
+            payload = ""
+            if msg["type"] == "text":
+                payload = msg["text"]["body"]
+            else:
+                payload = msg["interactive"]["button_reply"]["id"]
 
-            if payload.startswith("report_"):
+            if payload and payload.startswith("report_"):
                 fname = payload.replace("report_", "")
 
                 if fname in pending_reports:
