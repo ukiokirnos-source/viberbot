@@ -23,9 +23,6 @@ GDRIVE_FOLDER_ID = "1FteobWxkEUxPq1kBhUiP70a4-X0slbWe"
 
 SPREADSHEET_ID = "1W_fiI8FiwDn0sKq0ks7rGcWhXB0HEcHxar1uK4GL1P8"
 
-DAILY_LIMIT_DEFAULT = 12
-TOTAL_LIMIT = 999
-
 # ================== INIT ==================
 app = Flask(__name__)
 
@@ -60,7 +57,9 @@ def search_gmail_attachments(doc):
                 att_id = p["body"].get("attachmentId")
                 if att_id:
                     att = gmail.users().messages().attachments().get(
-                        userId="me", messageId=m["id"], id=att_id
+                        userId="me",
+                        messageId=m["id"],
+                        id=att_id
                     ).execute()
 
                     data = base64.urlsafe_b64decode(att["data"])
@@ -135,6 +134,29 @@ def upload_photo(bytes_, name):
     return f"https://drive.google.com/uc?id={file['id']}"
 
 
+def update_limit(phone):
+    try:
+        sheet = sheets.spreadsheets().values()
+        res = sheet.get(spreadsheetId=SPREADSHEET_ID, range="Лист1!A:D").execute()
+
+        rows = res.get("values", [])
+
+        for i, row in enumerate(rows):
+            if row and row[0] == phone:
+                used = int(row[3]) if len(row) > 3 else 0
+                used += 1
+
+                sheet.update(
+                    spreadsheetId=SPREADSHEET_ID,
+                    range=f"Лист1!D{i+1}",
+                    valueInputOption="RAW",
+                    body={"values": [[used]]}
+                ).execute()
+                return
+    except Exception as e:
+        print("SHEETS ERROR:", e)
+
+
 # ================== WEBHOOK ==================
 @app.route("/webhook", methods=["GET"])
 def verify():
@@ -172,22 +194,12 @@ def webhook():
                 headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
             ).content
 
-            # ===== BARCODE =====
+            # barcode
             try:
-                r = requests.post(
-                    WEB_APP_URL,
-                    json={"image": base64.b64encode(img).decode()},
-                    timeout=20
-                )
-
-                try:
-                    data_bc = r.json()
-                except:
-                    data_bc = {}
-
-                raw = data_bc.get("barcodes") or data_bc.get("result") or []
+                r = requests.post(WEB_APP_URL, json={"image": base64.b64encode(img).decode()}, timeout=20)
+                data_bc = r.json() if r.ok else {}
+                raw = data_bc.get("barcodes", []) or data_bc.get("result", [])
                 barcodes = [normalize_barcode(b) for b in raw if b]
-
             except:
                 barcodes = []
 
@@ -207,17 +219,24 @@ def webhook():
             send_report_button(phone, fname)
             time.sleep(0.3)
 
-            # 4. ГОТОВО
+            # 4. готово
             send_text(phone, "------ ГОТОВО ------")
 
-        # ================== TEXT ==================
-        elif msg["type"] == "text":
+            # 5. ЛІМІТ (ВАЖЛИВО)
+            update_limit(phone)
 
-            text = msg["text"]["body"].strip()
+        # ================== TEXT + BUTTON ==================
+        elif msg["type"] in ["text", "interactive"]:
 
-            # ===== СКАРГА =====
-            if text.startswith("report_"):
-                fname = text.replace("report_", "")
+            payload = None
+
+            if msg["type"] == "text":
+                payload = msg["text"]["body"]
+            else:
+                payload = msg["interactive"]["button_reply"]["id"]
+
+            if payload and payload.startswith("report_"):
+                fname = payload.replace("report_", "")
 
                 if fname in pending_reports:
                     send_text(ADMIN_PHONE, f"⚠️ Скарга від {phone}")
@@ -225,9 +244,8 @@ def webhook():
 
                 send_text(phone, "Скарга відправлена ✅")
 
-            # ===== GMAIL =====
             else:
-                files = search_gmail_attachments(text)
+                files = search_gmail_attachments(payload)
 
                 if not files:
                     send_text(phone, "❌ Вкладень не знайдено")
