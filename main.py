@@ -109,14 +109,6 @@ def upload_photo(bytes_, name):
     return f"https://drive.google.com/uc?id={file['id']}"
 
 
-# ================== WEBHOOK ==================
-@app.route("/webhook", methods=["GET"])
-def verify():
-    if request.args.get("hub.verify_token") == VERIFY_TOKEN:
-        return request.args.get("hub.challenge")
-    return "error", 403
-
-
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.get_json()
@@ -131,8 +123,9 @@ def webhook():
         msg = messages[0]
         phone = msg["from"]
 
-        # ===== ФОТО =====
+        # ================== ФОТО ==================
         if msg["type"] == "image":
+
             media_id = msg["image"]["id"]
 
             media_url = requests.get(
@@ -145,27 +138,106 @@ def webhook():
                 headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
             ).content
 
+            # ===== ШТРИХКОД =====
+            try:
+                r = requests.post(
+                    WEB_APP_URL,
+                    json={"image": base64.b64encode(img).decode()},
+                    timeout=20
+                )
+
+                print("BARCODE RAW:", r.text)
+
+                try:
+                    data_bc = r.json()
+                except:
+                    data_bc = {}
+
+                raw = (
+                    data_bc.get("barcodes")
+                    or data_bc.get("result")
+                    or []
+                )
+
+                barcodes = [normalize_barcode(b) for b in raw if normalize_barcode(b)]
+
+            except Exception as e:
+                print("BARCODE ERROR:", e)
+                barcodes = []
+
+            # ВІДПОВІДЬ
+            text = "\n".join(barcodes) if barcodes else "❌ Штрихкодів не знайдено"
+            send_text(phone, text)
+
+            # upload
             fname = f"photo_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
             url = upload_photo(img, fname)
 
             pending_reports[fname] = url
 
             send_image(phone, url)
+
+            # КНОПКА (ОСТАННЯ ПЕРЕД ГОТОВО)
             send_report_button(phone, fname)
 
             send_text(phone, "------ ГОТОВО ------")
 
-        # ===== ТЕКСТ =====
+        # ================== ТЕКСТ ==================
         elif msg["type"] == "text":
-            text = msg["text"]["body"]
 
-            send_text(phone, f"Я отримав: {text}")
+            text = msg["text"]["body"].strip()
+            print("TEXT:", text)
+
+            # ===== СКАРГА =====
+            if text.startswith("report_"):
+                fname = text.replace("report_", "")
+
+                if fname in pending_reports:
+                    send_text(ADMIN_PHONE, f"⚠️ Скарга від {phone}")
+                    send_image(ADMIN_PHONE, pending_reports[fname])
+
+                send_text(phone, "Скарга відправлена ✅")
+
+            # ===== GMAIL ПОШУК =====
+            else:
+                doc = text
+
+                print("SEARCHING GMAIL FOR:", doc)
+
+                files = search_gmail_attachments(doc)
+
+                if not files:
+                    send_text(phone, "❌ Вкладень не знайдено")
+                else:
+                    for f in files:
+                        try:
+                            media = MediaIoBaseUpload(
+                                io.BytesIO(f["data"]),
+                                mimetype='application/octet-stream'
+                            )
+
+                            file_drive = drive.files().create(
+                                body={'name': f["name"], 'parents': [GDRIVE_FOLDER_ID]},
+                                media_body=media,
+                                fields='id'
+                            ).execute()
+
+                            drive.permissions().create(
+                                fileId=file_drive['id'],
+                                body={'type': 'anyone', 'role': 'reader'}
+                            ).execute()
+
+                            url = f"https://drive.google.com/uc?id={file_drive['id']}"
+
+                            send_text(phone, f"📎 {f['name']}: {url}")
+
+                        except Exception as e:
+                            print("DRIVE ERROR:", e)
 
     except Exception as e:
-        print("ERROR:", e)
+        print("WEBHOOK ERROR:", e)
 
     return "ok", 200
-
 
 # ================== BUTTON HANDLER ==================
 @app.route("/webhook", methods=["POST"])
