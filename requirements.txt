@@ -1,11 +1,5 @@
-Flask
-requests
-viberbot
-google-api-python-client
-google-auth
-google-auth-httplib2
-gunicorn
-google-auth-oauthlib
-httplib2
-oauthlib
-certifi
+Flask==3.0.3
+requests==2.31.0
+google-api-python-client==2.126.0
+google-auth==2.29.0
+gunicorn==21.2.0
