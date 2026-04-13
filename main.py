@@ -134,25 +134,63 @@ def upload_photo(bytes_, name):
     return f"https://drive.google.com/uc?id={file['id']}"
 
 
+# ================== SHEETS (NEW FIX) ==================
 def update_limit(phone):
     try:
         sheet = sheets.spreadsheets().values()
-        res = sheet.get(spreadsheetId=SPREADSHEET_ID, range="Лист1!A:D").execute()
+
+        res = sheet.get(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Лист1!A:E"
+        ).execute()
 
         rows = res.get("values", [])
 
+        phone = re.sub(r'[^0-9]', '', str(phone))
+
+        found = False
+
         for i, row in enumerate(rows):
-            if row and row[0] == phone:
-                used = int(row[3]) if len(row) > 3 else 0
+            if row and re.sub(r'[^0-9]', '', str(row[0])) == phone:
+                found = True
+
+                used = int(row[3]) if len(row) > 3 and str(row[3]).isdigit() else 0
                 used += 1
 
                 sheet.update(
                     spreadsheetId=SPREADSHEET_ID,
-                    range=f"Лист1!D{i+1}",
+                    range=f"D{i+1}",
                     valueInputOption="RAW",
                     body={"values": [[used]]}
                 ).execute()
-                return
+
+                break
+
+        if not found:
+            sheet.append(
+                spreadsheetId=SPREADSHEET_ID,
+                range="Лист1!A:D",
+                valueInputOption="RAW",
+                body={"values": [[phone, "", "", 1]]}
+            ).execute()
+
+        # ===== GLOBAL COUNTER =====
+        total = 0
+        try:
+            t = sheet.get(spreadsheetId=SPREADSHEET_ID, range="E1").execute()
+            total = int(t.get("values", [["0"]])[0][0])
+        except:
+            total = 0
+
+        total += 1
+
+        sheet.update(
+            spreadsheetId=SPREADSHEET_ID,
+            range="E1",
+            valueInputOption="RAW",
+            body={"values": [[total]]}
+        ).execute()
+
     except Exception as e:
         print("SHEETS ERROR:", e)
 
@@ -179,7 +217,6 @@ def webhook():
         msg = messages[0]
         phone = msg["from"]
 
-        # ================== IMAGE ==================
         if msg["type"] == "image":
 
             media_id = msg["image"]["id"]
@@ -194,7 +231,6 @@ def webhook():
                 headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
             ).content
 
-            # barcode
             try:
                 r = requests.post(WEB_APP_URL, json={"image": base64.b64encode(img).decode()}, timeout=20)
                 data_bc = r.json() if r.ok else {}
@@ -203,11 +239,9 @@ def webhook():
             except:
                 barcodes = []
 
-            # 1. штрихкоди
             send_text(phone, "\n".join(barcodes) if barcodes else "❌ Штрихкодів не знайдено")
             time.sleep(0.3)
 
-            # 2. фото
             fname = f"photo_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
             url = upload_photo(img, fname)
             pending_reports[fname] = url
@@ -215,17 +249,14 @@ def webhook():
             send_image(phone, url)
             time.sleep(0.3)
 
-            # 3. кнопка
             send_report_button(phone, fname)
             time.sleep(0.3)
 
-            # 4. готово
             send_text(phone, "------ ГОТОВО ------")
 
-            # 5. ЛІМІТ (ВАЖЛИВО)
+            # 🔥 UPDATE BOTH COUNTERS
             update_limit(phone)
 
-        # ================== TEXT + BUTTON ==================
         elif msg["type"] in ["text", "interactive"]:
 
             payload = None
@@ -273,6 +304,5 @@ def webhook():
     return "ok", 200
 
 
-# ================== RUN ==================
 if __name__ == "__main__":
     app.run(port=5000)
