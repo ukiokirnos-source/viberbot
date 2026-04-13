@@ -4,7 +4,8 @@ import requests
 import datetime
 import hashlib
 import re
-from flask import Flask, request
+import time
+from flask import Flask, request, Response
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -20,11 +21,17 @@ WEB_APP_URL = "https://script.google.com/macros/s/AKfycbz5dCoxPzCC_GdDDCEsjZQtRw
 GMAIL_TOKEN_FILE = "gmail_token.json"
 GDRIVE_FOLDER_ID = "1FteobWxkEUxPq1kBhUiP70a4-X0slbWe"
 
+SPREADSHEET_ID = "1W_fiI8FiwDn0sKq0ks7rGcWhXB0HEcHxar1uK4GL1P8"
+
+DAILY_LIMIT_DEFAULT = 12
+TOTAL_LIMIT = 999
+
 # ================== INIT ==================
 app = Flask(__name__)
 
 gmail = build("gmail", "v1", credentials=Credentials.from_authorized_user_file(GMAIL_TOKEN_FILE))
 drive = build("drive", "v3", credentials=Credentials.from_authorized_user_file(GMAIL_TOKEN_FILE))
+sheets = build("sheets", "v4", credentials=Credentials.from_authorized_user_file(GMAIL_TOKEN_FILE))
 
 pending_reports = {}
 
@@ -37,7 +44,7 @@ def normalize_barcode(code):
 
 
 def search_gmail_attachments(doc):
-    query = f"{doc} newer_than:14d"
+    query = f"filename:{doc} newer_than:14d"
     res = gmail.users().messages().list(userId="me", q=query).execute()
     messages = res.get("messages", [])
 
@@ -45,7 +52,6 @@ def search_gmail_attachments(doc):
 
     for m in messages:
         msg = gmail.users().messages().get(userId="me", id=m["id"]).execute()
-
         parts = msg["payload"].get("parts", [])
 
         for p in parts:
@@ -151,92 +157,57 @@ def webhook():
         msg = messages[0]
         phone = msg["from"]
 
-       if msg["type"] == "image":
+        # ================== IMAGE ==================
+        if msg["type"] == "image":
 
-    import time
+            media_id = msg["image"]["id"]
 
-    media_id = msg["image"]["id"]
+            media_url = requests.get(
+                f"https://graph.facebook.com/v18.0/{media_id}",
+                headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+            ).json()["url"]
 
-    media_url = requests.get(
-        f"https://graph.facebook.com/v18.0/{media_id}",
-        headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
-    ).json()["url"]
+            img = requests.get(
+                media_url,
+                headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+            ).content
 
-    img = requests.get(
-        media_url,
-        headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
-    ).content
-
-    # ===== BARCODE =====
-    try:
-        r = requests.post(
-            WEB_APP_URL,
-            json={"image": base64.b64encode(img).decode()},
-            timeout=20
-        )
-
-        try:
-            data_bc = r.json()
-        except:
-            data_bc = {}
-
-        raw = data_bc.get("barcodes") or data_bc.get("result") or []
-
-        barcodes = [normalize_barcode(b) for b in raw if b]
-
-    except:
-        barcodes = []
-
-    # 1. штрихкоди
-    send_text(phone, "\n".join(barcodes) if barcodes else "❌ Штрихкодів не знайдено")
-
-    time.sleep(0.3)
-
-    # 2. фото
-    fname = f"photo_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
-    url = upload_photo(img, fname)
-    pending_reports[fname] = url
-
-    send_image(phone, url)
-
-    time.sleep(0.3)
-
-    # 3. кнопка
-    send_report_button(phone, fname)
-
-    time.sleep(0.3)
-
-    # 4. готово
-    send_text(phone, "------ ГОТОВО ------")
             # ===== BARCODE =====
             try:
-                r = requests.post(WEB_APP_URL, json={"image": base64.b64encode(img).decode()}, timeout=20)
+                r = requests.post(
+                    WEB_APP_URL,
+                    json={"image": base64.b64encode(img).decode()},
+                    timeout=20
+                )
 
                 try:
                     data_bc = r.json()
                 except:
                     data_bc = {}
 
-                raw = data_bc.get("barcodes", []) or data_bc.get("result", [])
-
-                barcodes = [normalize_barcode(b) for b in raw if normalize_barcode(b)]
+                raw = data_bc.get("barcodes") or data_bc.get("result") or []
+                barcodes = [normalize_barcode(b) for b in raw if b]
 
             except:
                 barcodes = []
 
             # 1. штрихкоди
             send_text(phone, "\n".join(barcodes) if barcodes else "❌ Штрихкодів не знайдено")
+            time.sleep(0.3)
 
             # 2. фото
             fname = f"photo_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
             url = upload_photo(img, fname)
             pending_reports[fname] = url
+
             send_image(phone, url)
+            time.sleep(0.3)
 
             # 3. кнопка
             send_report_button(phone, fname)
+            time.sleep(0.3)
 
-            # 4. готово
+            # 4. ГОТОВО
             send_text(phone, "------ ГОТОВО ------")
 
         # ================== TEXT ==================
@@ -244,6 +215,7 @@ def webhook():
 
             text = msg["text"]["body"].strip()
 
+            # ===== СКАРГА =====
             if text.startswith("report_"):
                 fname = text.replace("report_", "")
 
@@ -253,6 +225,7 @@ def webhook():
 
                 send_text(phone, "Скарга відправлена ✅")
 
+            # ===== GMAIL =====
             else:
                 files = search_gmail_attachments(text)
 
