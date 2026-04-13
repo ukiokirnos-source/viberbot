@@ -5,6 +5,7 @@ import datetime
 import hashlib
 import re
 import time
+import threading
 from flask import Flask, request, Response
 
 from google.oauth2.credentials import Credentials
@@ -12,7 +13,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
 # ================== НАЛАШТУВАННЯ ==================
-WHATSAPP_TOKEN = "EAAwJZC7glYnQBRM4PwjO0xZB8h2sjfubxUjpXwMilA5qBTk4pz8v0XinFCxomRWZCcRHGkBngI8fTXjhQjfegFs8GoZCzwpwUymp2I1FQkNj78yw02U0drLOvnOCZCQtHuA2CGHqVsZAfH7EZBKFKDYno3XvtZCGKZBVvzaZBLCWIXper7dYDi7cxIR2zJxhusEZBt7ZAQZDZD"
+WHATSAPP_TOKEN = "EAAwJZC7glYnQBRM4PwjO0xZB8h2sjfubxUjpXwMilA5qBTk4pz8v0XinFCxomRWZCcRHGkBngI8fTXjhQjfegFs8GoZCzwpwUymp2I1FQkNj78yw02U0drLOvnOCZCQtHuA2CGHVsZAfH7EZBKFKDYno3XvtZCGKZBVvzaZBLCWIXper7dYDi7cxIR2zJxhusEZBt7ZAQZDZD"
 PHONE_NUMBER_ID = "1017587501445701"
 VERIFY_TOKEN = "my_token_123"
 ADMIN_PHONE = "380661153200"
@@ -31,6 +32,21 @@ drive = build("drive", "v3", credentials=Credentials.from_authorized_user_file(G
 sheets = build("sheets", "v4", credentials=Credentials.from_authorized_user_file(GMAIL_TOKEN_FILE))
 
 pending_reports = {}
+total_counter = 0
+
+# ================== SHEETS INIT HEADERS ==================
+def init_headers():
+    try:
+        sheets.spreadsheets().values().update(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Лист1!A1:E1",
+            valueInputOption="RAW",
+            body={"values": [["PHONE", "NAME", "DAILY_LIMIT", "USED_TODAY", "TOTAL_USED"]]}
+        ).execute()
+    except:
+        pass
+
+init_headers()
 
 # ================== HELPERS ==================
 def normalize_barcode(code):
@@ -134,75 +150,72 @@ def upload_photo(bytes_, name):
     return f"https://drive.google.com/uc?id={file['id']}"
 
 
-# ================== SHEETS (NEW FIX) ==================
-def update_limit(phone):
-    try:
-        sheet = sheets.spreadsheets().values()
+# ================== SHEETS ==================
+def get_user(phone):
+    rows = sheets.spreadsheets().values().get(
+        spreadsheetId=SPREADSHEET_ID,
+        range="Лист1!A:E"
+    ).execute().get("values", [])
 
-        res = sheet.get(
-            spreadsheetId=SPREADSHEET_ID,
-            range="Лист1!A:E"
-        ).execute()
+    for i, r in enumerate(rows):
+        if r and r[0] == phone:
+            return i + 1, r
+    return None, None
 
-        rows = res.get("values", [])
 
-        phone = re.sub(r'[^0-9]', '', str(phone))
+def create_user(phone, name):
+    sheets.spreadsheets().values().append(
+        spreadsheetId=SPREADSHEET_ID,
+        range="Лист1!A:E",
+        valueInputOption="RAW",
+        body={"values": [[phone, name, 12, 0, 0]]}
+    ).execute()
 
-        found = False
 
-        for i, row in enumerate(rows):
-            if row and re.sub(r'[^0-9]', '', str(row[0])) == phone:
-                found = True
+def update_used(row, value):
+    sheets.spreadsheets().values().update(
+        spreadsheetId=SPREADSHEET_ID,
+        range=f"Лист1!D{row}",
+        valueInputOption="RAW",
+        body={"values": [[value]]}
+    ).execute()
 
-                used = int(row[3]) if len(row) > 3 and str(row[3]).isdigit() else 0
-                used += 1
 
-                sheet.update(
-                    spreadsheetId=SPREADSHEET_ID,
-                    range=f"D{i+1}",
-                    valueInputOption="RAW",
-                    body={"values": [[used]]}
-                ).execute()
+def update_total(val):
+    sheets.spreadsheets().values().update(
+        spreadsheetId=SPREADSHEET_ID,
+        range="Лист1!E2",
+        valueInputOption="RAW",
+        body={"values": [[val]]}
+    ).execute()
 
-                break
 
-        if not found:
-            sheet.append(
-                spreadsheetId=SPREADSHEET_ID,
-                range="Лист1!A:D",
-                valueInputOption="RAW",
-                body={"values": [[phone, "", "", 1]]}
-            ).execute()
+def reset_daily():
+    while True:
+        now = datetime.datetime.now()
+        seconds = ((24 - now.hour - 1) * 3600) + ((60 - now.minute - 1) * 60)
+        time.sleep(seconds)
 
-        # ===== GLOBAL COUNTER =====
-        total = 0
         try:
-            t = sheet.get(spreadsheetId=SPREADSHEET_ID, range="E1").execute()
-            total = int(t.get("values", [["0"]])[0][0])
+            rows = sheets.spreadsheets().values().get(
+                spreadsheetId=SPREADSHEET_ID,
+                range="Лист1!D2:D"
+            ).execute().get("values", [])
+
+            for i in range(len(rows)):
+                sheets.spreadsheets().values().update(
+                    spreadsheetId=SPREADSHEET_ID,
+                    range=f"Лист1!D{i+2}",
+                    valueInputOption="RAW",
+                    body={"values": [[0]]}
+                ).execute()
         except:
-            total = 0
+            pass
 
-        total += 1
 
-        sheet.update(
-            spreadsheetId=SPREADSHEET_ID,
-            range="E1",
-            valueInputOption="RAW",
-            body={"values": [[total]]}
-        ).execute()
-
-    except Exception as e:
-        print("SHEETS ERROR:", e)
-
+threading.Thread(target=reset_daily, daemon=True).start()
 
 # ================== WEBHOOK ==================
-@app.route("/webhook", methods=["GET"])
-def verify():
-    if request.args.get("hub.verify_token") == VERIFY_TOKEN:
-        return request.args.get("hub.challenge")
-    return "error", 403
-
-
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.get_json()
@@ -217,7 +230,21 @@ def webhook():
         msg = messages[0]
         phone = msg["from"]
 
+        # ================== IMAGE ==================
         if msg["type"] == "image":
+
+            row, user = get_user(phone)
+
+            if not row:
+                create_user(phone, phone)
+                row, user = get_user(phone)
+
+            limit = int(user[2])
+            used = int(user[3])
+
+            if used >= limit:
+                send_text(phone, "🚫 Ліміт вичерпано")
+                return "ok", 200
 
             media_id = msg["image"]["id"]
 
@@ -226,60 +253,48 @@ def webhook():
                 headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
             ).json()["url"]
 
-            img = requests.get(
-                media_url,
-                headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
-            ).content
+            img = requests.get(media_url, headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}).content
 
             try:
-                r = requests.post(WEB_APP_URL, json={"image": base64.b64encode(img).decode()}, timeout=20)
-                data_bc = r.json() if r.ok else {}
-                raw = data_bc.get("barcodes", []) or data_bc.get("result", [])
+                r = requests.post(WEB_APP_URL, json={"image": base64.b64encode(img).decode()})
+                raw = r.json().get("barcodes", [])
                 barcodes = [normalize_barcode(b) for b in raw if b]
             except:
                 barcodes = []
 
-            send_text(phone, "\n".join(barcodes) if barcodes else "❌ Штрихкодів не знайдено")
-            time.sleep(0.3)
+            send_text(phone, "\n".join(barcodes) if barcodes else "❌ Нема штрихкодів")
 
             fname = f"photo_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
             url = upload_photo(img, fname)
+
             pending_reports[fname] = url
 
             send_image(phone, url)
-            time.sleep(0.3)
-
             send_report_button(phone, fname)
-            time.sleep(0.3)
-
             send_text(phone, "------ ГОТОВО ------")
 
-            # 🔥 UPDATE BOTH COUNTERS
-            update_limit(phone)
+            update_used(row, used + 1)
+            global total_counter
+            total_counter += 1
 
-        elif msg["type"] in ["text", "interactive"]:
+        # ================== TEXT ==================
+        elif msg["type"] == "text":
+            text = msg["text"]["body"].strip()
 
-            payload = None
-
-            if msg["type"] == "text":
-                payload = msg["text"]["body"]
-            else:
-                payload = msg["interactive"]["button_reply"]["id"]
-
-            if payload and payload.startswith("report_"):
-                fname = payload.replace("report_", "")
+            if text.startswith("report_"):
+                fname = text.replace("report_", "")
 
                 if fname in pending_reports:
                     send_text(ADMIN_PHONE, f"⚠️ Скарга від {phone}")
                     send_image(ADMIN_PHONE, pending_reports[fname])
 
-                send_text(phone, "Скарга відправлена ✅")
+                send_text(phone, "Ок, передано")
 
             else:
-                files = search_gmail_attachments(payload)
+                files = search_gmail_attachments(text)
 
                 if not files:
-                    send_text(phone, "❌ Вкладень не знайдено")
+                    send_text(phone, "Нема файлів")
                 else:
                     for f in files:
                         media = MediaIoBaseUpload(io.BytesIO(f["data"]), mimetype='application/octet-stream')
@@ -296,7 +311,7 @@ def webhook():
                         ).execute()
 
                         url = f"https://drive.google.com/uc?id={file_drive['id']}"
-                        send_text(phone, f"📎 {f['name']}: {url}")
+                        send_text(phone, url)
 
     except Exception as e:
         print("ERROR:", e)
@@ -304,5 +319,6 @@ def webhook():
     return "ok", 200
 
 
+# ================== RUN ==================
 if __name__ == "__main__":
     app.run(port=5000)
