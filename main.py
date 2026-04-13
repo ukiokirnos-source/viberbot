@@ -11,7 +11,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
 # ================== НАЛАШТУВАННЯ ==================
-WHATSAPP_TOKEN = "EAAwJZC7glYnQBRDoArCriXhHPxqu2kNMd9XCZBHMOgZBneeWohP2kerp6XAAuRwr84gpOk2aZAbyAU7Cj1Q0Deg9LBCYqLTAIrSGenSWGP32fn2pi5g4qiVAh6pASk4qnmCL0SnqXptTEIVEybZBUOZBlSOgngNUSjOfK4fof5gXFcTMEZBPMoMbnuZAxbjFxgIyR3nVHKgpUU03a8JpYNTj0qHIlBW4yfZCsAb7FsvnZBT94e9pXTW7fGKhJzW8ZBgOxqgPhj56VUAluHFWEJliwYgSW44"
+WHATSAPP_TOKEN = "EAAwJZC7glYnQBRM4PwjO0xZB8h2sjfubxUjpXwMilA5qBTk4pz8v0XinFCxomRWZCcRHGkBngI8fTXjhQjfegFs8GoZCzwpwUymp2I1FQkNj78yw02U0drLOvnOCZCQtHuA2CGHqVsZAfH7EZBKFKDYno3XvtZCGKZBVvzaZBLCWIXper7dYDi7cxIR2zJxhusEZBt7ZAQZDZD"
 PHONE_NUMBER_ID = "1017587501445701"
 VERIFY_TOKEN = "my_token_123"
 ADMIN_PHONE = "380661153200"
