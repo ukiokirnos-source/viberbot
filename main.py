@@ -21,17 +21,12 @@ GMAIL_TOKEN_FILE = "gmail_token.json"
 GDRIVE_FOLDER_ID = "1FteobWxkEUxPq1kBhUiP70a4-X0slbWe"
 SPREADSHEET_ID = "1W_fiI8FiwDn0sKq0ks7rGcWhXB0HEcHxar1uK4GL1P8"
 
-DAILY_LIMIT_DEFAULT = 12
-TOTAL_LIMIT = 999
-
 # ================== INIT ==================
 app = Flask(__name__)
 
 gmail = build("gmail", "v1", credentials=Credentials.from_authorized_user_file(GMAIL_TOKEN_FILE))
 drive = build("drive", "v3", credentials=Credentials.from_authorized_user_file(GMAIL_TOKEN_FILE))
-sheets = build("sheets", "v4", credentials=Credentials.from_authorized_user_file(GMAIL_TOKEN_FILE))
 
-processed_images = set()
 pending_reports = {}
 
 # ================== HELPERS ==================
@@ -65,6 +60,39 @@ def send_image(phone, image_url):
     requests.post(url, headers=headers, json=data)
 
 
+def send_report_button(phone, fname):
+    url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+    data = {
+        "messaging_product": "whatsapp",
+        "to": phone,
+        "type": "interactive",
+        "interactive": {
+            "type": "button",
+            "body": {
+                "text": "Є проблема з фото?"
+            },
+            "action": {
+                "buttons": [
+                    {
+                        "type": "reply",
+                        "reply": {
+                            "id": f"report_{fname}",
+                            "title": "⚠️ Скарга"
+                        }
+                    }
+                ]
+            }
+        }
+    }
+
+    requests.post(url, headers=headers, json=data)
+
+
 def upload_photo(bytes_, name):
     media = MediaIoBaseUpload(io.BytesIO(bytes_), mimetype='image/jpeg')
     file = drive.files().create(
@@ -79,16 +107,6 @@ def upload_photo(bytes_, name):
     ).execute()
 
     return f"https://drive.google.com/uc?id={file['id']}"
-
-
-def normalize_barcode(code):
-    if not code:
-        return None
-    code = code.upper().strip()
-    replacements = {'O':'0','I':'1','L':'1','S':'5','B':'8','Z':'2'}
-    code = ''.join(replacements.get(c,c) for c in code)
-    code = re.sub(r'[^0-9]', '', code)
-    return code if code else None
 
 
 # ================== WEBHOOK ==================
@@ -127,31 +145,48 @@ def webhook():
                 headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
             ).content
 
-            # штрихкод
-            try:
-                r = requests.post(WEB_APP_URL, json={"image": base64.b64encode(img).decode()})
-                raw = r.json().get("barcodes", [])
-                barcodes = [normalize_barcode(b) for b in raw if normalize_barcode(b)]
-            except:
-                barcodes = []
-
-            text = "\n".join(barcodes) if barcodes else "❌ Штрихкодів не знайдено"
-            send_text(phone, text)
-
             fname = f"photo_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
             url = upload_photo(img, fname)
 
             pending_reports[fname] = url
 
             send_image(phone, url)
-            send_text(phone, f"Напиши:\nreport_{fname}\nякщо є проблема")
+            send_report_button(phone, fname)
+
+            send_text(phone, "------ ГОТОВО ------")
 
         # ===== ТЕКСТ =====
         elif msg["type"] == "text":
             text = msg["text"]["body"]
 
-            if text.startswith("report_"):
-                fname = text.replace("report_", "")
+            send_text(phone, f"Я отримав: {text}")
+
+    except Exception as e:
+        print("ERROR:", e)
+
+    return "ok", 200
+
+
+# ================== BUTTON HANDLER ==================
+@app.route("/webhook", methods=["POST"])
+def buttons():
+    data = request.get_json()
+
+    try:
+        entry = data["entry"][0]["changes"][0]["value"]
+        messages = entry.get("messages")
+
+        if not messages:
+            return "ok", 200
+
+        msg = messages[0]
+        phone = msg["from"]
+
+        if msg["type"] == "interactive":
+            button_id = msg["interactive"]["button_reply"]["id"]
+
+            if button_id.startswith("report_"):
+                fname = button_id.replace("report_", "")
 
                 if fname in pending_reports:
                     send_text(ADMIN_PHONE, f"⚠️ Скарга від {phone}")
@@ -159,13 +194,15 @@ def webhook():
 
                 send_text(phone, "Скарга відправлена ✅")
 
-            else:
-                send_text(phone, "Надішли фото або номер документа")
-
-    except Exception as e:
-        print("ERROR:", e)
+    except:
+        pass
 
     return "ok", 200
+
+
+# ================== RUN ==================
+if __name__ == "__main__":
+    app.run(port=5000)
 
 
 # ================== RUN ==================
