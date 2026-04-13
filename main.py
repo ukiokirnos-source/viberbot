@@ -151,21 +151,63 @@ def webhook():
         msg = messages[0]
         phone = msg["from"]
 
-        # ================== IMAGE ==================
-        if msg["type"] == "image":
+       if msg["type"] == "image":
 
-            media_id = msg["image"]["id"]
+    import time
 
-            media_url = requests.get(
-                f"https://graph.facebook.com/v18.0/{media_id}",
-                headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
-            ).json()["url"]
+    media_id = msg["image"]["id"]
 
-            img = requests.get(
-                media_url,
-                headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
-            ).content
+    media_url = requests.get(
+        f"https://graph.facebook.com/v18.0/{media_id}",
+        headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+    ).json()["url"]
 
+    img = requests.get(
+        media_url,
+        headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+    ).content
+
+    # ===== BARCODE =====
+    try:
+        r = requests.post(
+            WEB_APP_URL,
+            json={"image": base64.b64encode(img).decode()},
+            timeout=20
+        )
+
+        try:
+            data_bc = r.json()
+        except:
+            data_bc = {}
+
+        raw = data_bc.get("barcodes") or data_bc.get("result") or []
+
+        barcodes = [normalize_barcode(b) for b in raw if b]
+
+    except:
+        barcodes = []
+
+    # 1. штрихкоди
+    send_text(phone, "\n".join(barcodes) if barcodes else "❌ Штрихкодів не знайдено")
+
+    time.sleep(0.3)
+
+    # 2. фото
+    fname = f"photo_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+    url = upload_photo(img, fname)
+    pending_reports[fname] = url
+
+    send_image(phone, url)
+
+    time.sleep(0.3)
+
+    # 3. кнопка
+    send_report_button(phone, fname)
+
+    time.sleep(0.3)
+
+    # 4. готово
+    send_text(phone, "------ ГОТОВО ------")
             # ===== BARCODE =====
             try:
                 r = requests.post(WEB_APP_URL, json={"image": base64.b64encode(img).decode()}, timeout=20)
