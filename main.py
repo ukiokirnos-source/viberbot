@@ -149,6 +149,19 @@ def upload_photo(bytes_, name):
     return f"https://drive.google.com/uc?id={file['id']}"
 
 
+# ================== SAFE MEDIA GET (FIX) ==================
+def get_media_url(media_id):
+    try:
+        r = requests.get(
+            f"https://graph.facebook.com/v18.0/{media_id}",
+            headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+        ).json()
+
+        return r.get("url")
+    except:
+        return None
+
+
 # ================== SHEETS ==================
 def get_user(phone):
     rows = sheets.spreadsheets().values().get(
@@ -230,12 +243,11 @@ def webhook():
         msg = messages[0]
         phone = msg["from"]
 
-        # ім'я користувача (ВАЖЛИВО)
-        name = ""
+        name = phone
         try:
             name = entry["contacts"][0]["profile"]["name"]
         except:
-            name = phone
+            pass
 
         # ================== IMAGE ==================
         if msg["type"] == "image":
@@ -255,12 +267,15 @@ def webhook():
 
             media_id = msg["image"]["id"]
 
-            media_url = requests.get(
-                f"https://graph.facebook.com/v18.0/{media_id}",
-                headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
-            ).json()["url"]
+            media_url = get_media_url(media_id)
+            if not media_url:
+                print("MEDIA ERROR:", media_id)
+                return "ok", 200
 
-            img = requests.get(media_url, headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}).content
+            img = requests.get(
+                media_url,
+                headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+            ).content
 
             try:
                 r = requests.post(WEB_APP_URL, json={"image": base64.b64encode(img).decode()}, timeout=20)
