@@ -4,20 +4,18 @@ import requests
 import datetime
 import hashlib
 import re
-from flask import Flask, request, Response
-from viberbot import Api
-from viberbot.api.bot_configuration import BotConfiguration
-from viberbot.api.messages.text_message import TextMessage
-from viberbot.api.messages.picture_message import PictureMessage
-from viberbot.api.messages.rich_media_message import RichMediaMessage
-from viberbot.api.viber_requests import ViberMessageRequest, ViberConversationStartedRequest
+from flask import Flask, request
+
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
 # ================== НАЛАШТУВАННЯ ==================
-VIBER_TOKEN = "4fdbb2493ae7ddc2-cd8869c327e2c592-60fd2dddaa295531"
-ADMIN_ID = "uJBIST3PYaJLoflfY/9zkQ=="
+WHATSAPP_TOKEN = "EAAwJZC7glYnQBRDoArCriXhHPxqu2kNMd9XCZBHMOgZBneeWohP2kerp6XAAuRwr84gpOk2aZAbyAU7Cj1Q0Deg9LBCYqLTAIrSGenSWGP32fn2pi5g4qiVAh6pASk4qnmCL0SnqXptTEIVEybZBUOZBlSOgngNUSjOfK4fof5gXFcTMEZBPMoMbnuZAxbjFxgIyR3nVHKgpUU03a8JpYNTj0qHIlBW4yfZCsAb7FsvnZBT94e9pXTW7fGKhJzW8ZBgOxqgPhj56VUAluHFWEJliwYgSW44"
+PHONE_NUMBER_ID = "1017587501445701"
+VERIFY_TOKEN = "my_token_123"
+ADMIN_PHONE = "380661153200"
+
 WEB_APP_URL = "https://script.google.com/macros/s/AKfycbz5dCoxPzCC_GdDDCEsjZQtRwW74rqVvaPpp0Uwj7ioD5DRy9--An-4aiqgJNzWKktKJA/exec"
 GMAIL_TOKEN_FILE = "gmail_token.json"
 GDRIVE_FOLDER_ID = "1FteobWxkEUxPq1kBhUiP70a4-X0slbWe"
@@ -25,37 +23,64 @@ SPREADSHEET_ID = "1W_fiI8FiwDn0sKq0ks7rGcWhXB0HEcHxar1uK4GL1P8"
 
 DAILY_LIMIT_DEFAULT = 12
 TOTAL_LIMIT = 999
-ADMIN_NOTIFY_AT = 100
 
-SCOPES_GMAIL = ["https://www.googleapis.com/auth/gmail.readonly"]
-SCOPES_DRIVE = ['https://www.googleapis.com/auth/drive.file']
-SCOPES_SHEETS = ['https://www.googleapis.com/auth/spreadsheets']
-
-# ================== FLASK / VIBER ==================
+# ================== INIT ==================
 app = Flask(__name__)
-viber = Api(BotConfiguration(
-    name='Джексон🤖',
-    avatar='https://raw.githubusercontent.com/ukiokirnos-source/viberbot/bea72a7878267cc513cdd87669f9eb6ee0faca50/free-icon-bot-4712106.png',
-    auth_token=VIBER_TOKEN
-))
 
-# Google
-gmail_creds = Credentials.from_authorized_user_file(GMAIL_TOKEN_FILE, SCOPES_GMAIL)
-gmail = build("gmail", "v1", credentials=gmail_creds)
+gmail = build("gmail", "v1", credentials=Credentials.from_authorized_user_file(GMAIL_TOKEN_FILE))
+drive = build("drive", "v3", credentials=Credentials.from_authorized_user_file(GMAIL_TOKEN_FILE))
+sheets = build("sheets", "v4", credentials=Credentials.from_authorized_user_file(GMAIL_TOKEN_FILE))
 
-drive_creds = Credentials.from_authorized_user_file(GMAIL_TOKEN_FILE, SCOPES_DRIVE)
-drive = build('drive', 'v3', credentials=drive_creds)
-
-sheets_creds = Credentials.from_authorized_user_file(GMAIL_TOKEN_FILE, SCOPES_SHEETS)
-sheets = build('sheets', 'v4', credentials=sheets_creds)
-
-# ================== GLOBALS ==================
-processed_tokens = set()
 processed_images = set()
 pending_reports = {}
-admin_notified = False
 
 # ================== HELPERS ==================
+def send_text(phone, text):
+    url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "messaging_product": "whatsapp",
+        "to": phone,
+        "type": "text",
+        "text": {"body": text}
+    }
+    requests.post(url, headers=headers, json=data)
+
+
+def send_image(phone, image_url):
+    url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "messaging_product": "whatsapp",
+        "to": phone,
+        "type": "image",
+        "image": {"link": image_url}
+    }
+    requests.post(url, headers=headers, json=data)
+
+
+def upload_photo(bytes_, name):
+    media = MediaIoBaseUpload(io.BytesIO(bytes_), mimetype='image/jpeg')
+    file = drive.files().create(
+        body={'name': name, 'parents': [GDRIVE_FOLDER_ID]},
+        media_body=media,
+        fields='id'
+    ).execute()
+
+    drive.permissions().create(
+        fileId=file['id'],
+        body={'type': 'anyone', 'role': 'reader'}
+    ).execute()
+
+    return f"https://drive.google.com/uc?id={file['id']}"
+
+
 def normalize_barcode(code):
     if not code:
         return None
@@ -65,219 +90,84 @@ def normalize_barcode(code):
     code = re.sub(r'[^0-9]', '', code)
     return code if code else None
 
-# ================== GOOGLE SHEETS LIMITS ==================
-def get_users():
-    res = sheets.spreadsheets().values().get(
-        spreadsheetId=SPREADSHEET_ID,
-        range="Лист1!A:D"
-    ).execute()
-    return res.get("values", [])
 
-def get_user_row(user_id):
-    rows = get_users()
-    for i, r in enumerate(rows):
-        if r and r[0] == user_id:
-            return i + 1, r
-    return None, None
+# ================== WEBHOOK ==================
+@app.route("/webhook", methods=["GET"])
+def verify():
+    if request.args.get("hub.verify_token") == VERIFY_TOKEN:
+        return request.args.get("hub.challenge")
+    return "error", 403
 
-def add_user(user_id, name):
-    sheets.spreadsheets().values().append(
-        spreadsheetId=SPREADSHEET_ID,
-        range="Лист1!A:D",
-        valueInputOption="RAW",
-        body={"values": [[user_id, name, DAILY_LIMIT_DEFAULT, 0]]}
-    ).execute()
 
-def update_user_counter(row, used):
-    sheets.spreadsheets().values().update(
-        spreadsheetId=SPREADSHEET_ID,
-        range=f"Лист1!D{row}",
-        valueInputOption="RAW",
-        body={"values": [[used]]}
-    ).execute()
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    data = request.get_json()
 
-def get_total_used():
-    val = sheets.spreadsheets().values().get(
-        spreadsheetId=SPREADSHEET_ID,
-        range="Лист1!E1"
-    ).execute().get("values", [["0"]])[0][0]
     try:
-        return int(val)
-    except:
-        return 0
+        entry = data["entry"][0]["changes"][0]["value"]
+        messages = entry.get("messages")
 
-def set_total_used(val):
-    sheets.spreadsheets().values().update(
-        spreadsheetId=SPREADSHEET_ID,
-        range="Лист1!E1",
-        valueInputOption="RAW",
-        body={"values": [[val]]}
-    ).execute()
+        if not messages:
+            return "ok", 200
 
-# ================== GMAIL SEARCH ==================
-def search_gmail_attachments(doc):
-    query = f"filename:{doc} newer_than:14d"
-    res = gmail.users().messages().list(userId="me", q=query).execute()
-    messages = res.get("messages", [])
-    files = []
-    for m in messages:
-        msg = gmail.users().messages().get(userId="me", id=m["id"]).execute()
-        parts = msg["payload"].get("parts", [])
-        for p in parts:
-            filename = p.get("filename")
-            if filename and doc in filename:
-                att_id = p["body"].get("attachmentId")
-                if att_id:
-                    att = gmail.users().messages().attachments().get(
-                        userId="me", messageId=m["id"], id=att_id
-                    ).execute()
-                    data = base64.urlsafe_b64decode(att["data"])
-                    files.append({"name": filename, "data": data})
-    return files
+        msg = messages[0]
+        phone = msg["from"]
 
-# ================== DRIVE ==================
-def upload_photo(bytes_, name):
-    media = MediaIoBaseUpload(io.BytesIO(bytes_), mimetype='image/jpeg')
-    file = drive.files().create(
-        body={'name': name, 'parents': [GDRIVE_FOLDER_ID]},
-        media_body=media,
-        fields='id'
-    ).execute()
-    drive.permissions().create(
-        fileId=file['id'],
-        body={'type': 'anyone', 'role': 'reader'}
-    ).execute()
-    return f"https://drive.google.com/uc?id={file['id']}"
+        # ===== ФОТО =====
+        if msg["type"] == "image":
+            media_id = msg["image"]["id"]
 
-# ================== MAIN ==================
-@app.route('/', methods=['POST'])
-def incoming():
-    req = viber.parse_request(request.get_data())
-    token = getattr(req, 'message_token', None)
-    if token in processed_tokens:
-        return Response(status=200)
-    processed_tokens.add(token)
+            media_url = requests.get(
+                f"https://graph.facebook.com/v18.0/{media_id}",
+                headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+            ).json()["url"]
 
-    total_used = get_total_used()
-    global admin_notified
+            img = requests.get(
+                media_url,
+                headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+            ).content
 
-    if total_used >= TOTAL_LIMIT:
-        if isinstance(req, ViberMessageRequest):
-            viber.send_messages(req.sender.id, [TextMessage(text=f"🚫 Глобальний ліміт {TOTAL_LIMIT} фото вичерпано. Бот вимкнений.")])
-        return Response(status=200)
-
-    if isinstance(req, ViberConversationStartedRequest):
-        viber.send_messages(req.user.id, [TextMessage(text="Привіт! Відправ фото або номер документа.")])
-        return Response(status=200)
-
-    if isinstance(req, ViberMessageRequest):
-        msg = req.message
-        user_id = req.sender.id
-        name = req.sender.name
-
-        # ================== ФОТО ==================
-        if hasattr(msg, 'media') and msg.media:
-            remaining = TOTAL_LIMIT - total_used
-            if remaining <= ADMIN_NOTIFY_AT and not admin_notified:
-                viber.send_messages(ADMIN_ID, [TextMessage(text=f"⚠️ До глобального ліміту {TOTAL_LIMIT} залишилось {remaining} фото.")])
-                admin_notified = True
-
-            img = requests.get(msg.media, timeout=10).content
-            img_hash = hashlib.sha256(img).hexdigest()
-            if img_hash in processed_images:
-                return Response(status=200)
-            processed_images.add(img_hash)
-
-            row, data = get_user_row(user_id)
-            if not row:
-                add_user(user_id, name)
-                row, data = get_user_row(user_id)
-
-            limit = int(data[2])
-            used = int(data[3])
-            if used >= limit:
-                viber.send_messages(user_id, [TextMessage(text=f"🚫 Ліміт {limit} фото на сьогодні вичерпано.")])
-                return Response(status=200)
-
-            # обробка штрихкодів
+            # штрихкод
             try:
-                r = requests.post(WEB_APP_URL, json={"image": base64.b64encode(img).decode()}, timeout=20)
-                raw_barcodes = r.json().get("barcodes", [])
-                barcodes = [normalize_barcode(b) for b in raw_barcodes if normalize_barcode(b)]
+                r = requests.post(WEB_APP_URL, json={"image": base64.b64encode(img).decode()})
+                raw = r.json().get("barcodes", [])
+                barcodes = [normalize_barcode(b) for b in raw if normalize_barcode(b)]
             except:
                 barcodes = []
 
-            update_user_counter(row, used + 1)
-            set_total_used(total_used + 1)
-
             text = "\n".join(barcodes) if barcodes else "❌ Штрихкодів не знайдено"
-            viber.send_messages(user_id, [TextMessage(text=text)])
+            send_text(phone, text)
 
             fname = f"photo_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
             url = upload_photo(img, fname)
+
             pending_reports[fname] = url
 
-            viber.send_messages(user_id, [
-                PictureMessage(media=url, text=""),
-                RichMediaMessage(
-                    rich_media={
-                        "Type": "rich_media",
-                        "ButtonsGroupColumns": 6,
-                        "ButtonsGroupRows": 1,
-                        "Buttons": [{
-                            "Columns": 6,
-                            "Rows": 1,
-                            "ActionType": "reply",
-                            "ActionBody": f"report_{fname}",
-                            "Text": "⚠️ Скарга",
-                            "BgColor": "#ff4444",
-                            "TextColor": "#ffffff"
-                        }]
-                    },
-                    min_api_version=2
-                ),
-                TextMessage(text="──────────────\nГотово.\n──────────────")
-            ])
+            send_image(phone, url)
+            send_text(phone, f"Напиши:\nreport_{fname}\nякщо є проблема")
 
-        # ================== СКАРГИ ==================
-        elif hasattr(msg, 'text') and msg.text.startswith("report_"):
-            fname = msg.text.replace("report_", "")
-            if fname in pending_reports:
-                viber.send_messages(ADMIN_ID, [
-                    TextMessage(text=f"⚠️ Скарга від {user_id}"),
-                    PictureMessage(media=pending_reports[fname])
-                ])
-            viber.send_messages(user_id, [TextMessage(text="Скарга відправлена адміну ✅")])
+        # ===== ТЕКСТ =====
+        elif msg["type"] == "text":
+            text = msg["text"]["body"]
 
-        # ================== ПОШУК ВКЛАДЕНЬ ==================
-        elif hasattr(msg, 'text'):
-            doc = msg.text.strip()
-            files = search_gmail_attachments(doc)
-            if not files:
-                viber.send_messages(user_id, [TextMessage(text="❌ Вкладень не знайдено")])
+            if text.startswith("report_"):
+                fname = text.replace("report_", "")
+
+                if fname in pending_reports:
+                    send_text(ADMIN_PHONE, f"⚠️ Скарга від {phone}")
+                    send_image(ADMIN_PHONE, pending_reports[fname])
+
+                send_text(phone, "Скарга відправлена ✅")
+
             else:
-                for f in files:
-                    try:
-                        media = MediaIoBaseUpload(io.BytesIO(f["data"]), mimetype='application/octet-stream')
-                        file_drive = drive.files().create(
-                            body={'name': f["name"], 'parents':[GDRIVE_FOLDER_ID]},
-                            media_body=media,
-                            fields='id'
-                        ).execute()
-                        drive.permissions().create(
-                            fileId=file_drive['id'],
-                            body={'type':'anyone','role':'reader'}
-                        ).execute()
-                        url = f"https://drive.google.com/uc?id={file_drive['id']}"
-                        viber.send_messages(user_id, [TextMessage(text=f"📎 {f['name']}: {url}")])
-                    except:
-                        viber.send_messages(user_id, [TextMessage(text=f"❌ Не вдалося відправити файл {f['name']}")])
+                send_text(phone, "Надішли фото або номер документа")
 
-    return Response(status=200)
+    except Exception as e:
+        print("ERROR:", e)
 
-@app.route('/', methods=['GET'])
-def ping():
-    return "OK", 200
+    return "ok", 200
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+
+# ================== RUN ==================
+if __name__ == "__main__":
+    app.run(port=5000)
