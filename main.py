@@ -156,27 +156,22 @@ def increment_global_counter():
 
         res = sheet.get(
             spreadsheetId=SPREADSHEET_ID,
-            range="Лист1!E1"
+            range="Лист1!E2:E"
         ).execute()
 
-        val = res.get("values", [["0"]])[0][0]
+        rows = res.get("values", [])
 
-        try:
-            total = int(val)
-        except:
-            total = 0
-
-        total += 1
+        total = len(rows)
 
         sheet.update(
             spreadsheetId=SPREADSHEET_ID,
-            range="Лист1!E1",
+            range="E1",
             valueInputOption="RAW",
             body={"values": [[total]]}
         ).execute()
 
     except Exception as e:
-        print("GLOBAL COUNTER ERROR:", e)
+        print("TOTAL ERROR:", e)
 
 
 # ================== SHEETS ==================
