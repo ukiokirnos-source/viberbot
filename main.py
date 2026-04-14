@@ -148,8 +148,19 @@ def upload_photo(bytes_, name):
 
     return f"https://drive.google.com/uc?id={file['id']}"
 
+# ================== LOG PHOTO ==================
+def log_photo():
+    try:
+        sheets.spreadsheets().values().append(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Лист1!E:E",
+            valueInputOption="RAW",
+            body={"values": [[datetime.datetime.now().isoformat()]]}
+        ).execute()
+    except Exception as e:
+        print("LOG ERROR:", e)
 
-# ================== GLOBAL COUNTER FIX ==================
+# ================== GLOBAL COUNTER ==================
 def increment_global_counter():
     try:
         sheet = sheets.spreadsheets().values()
@@ -172,7 +183,6 @@ def increment_global_counter():
 
     except Exception as e:
         print("TOTAL ERROR:", e)
-
 
 # ================== SHEETS ==================
 def get_user(phone):
@@ -204,7 +214,6 @@ def update_used(row, value):
         body={"values": [[value]]}
     ).execute()
 
-
 # ================== WEBHOOK ==================
 @app.route("/webhook", methods=["GET", "POST"])
 def webhook():
@@ -225,7 +234,6 @@ def webhook():
         except:
             name = phone
 
-        # ================== IMAGE ==================
         if msg["type"] == "image":
 
             row, user = get_user(phone)
@@ -279,10 +287,9 @@ def webhook():
 
             update_used(row, used + 1)
 
-            # 🔥 GLOBAL COUNTER FIXED
+            log_photo()
             increment_global_counter()
 
-        # ================== TEXT ==================
         elif msg["type"] in ["text", "interactive"]:
 
             payload = ""
