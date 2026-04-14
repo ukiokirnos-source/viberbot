@@ -271,19 +271,44 @@ def webhook():
             except:
                 barcodes = []
 
-            send_text(phone, "\n".join(barcodes) if barcodes else "❌ Штрихкодів не знайдено")
+            # ================== 🔥 ЗМІНЕНО ТІЛЬКИ ЦЕ ==================
+            text = "\n".join(barcodes) if barcodes else "❌ Штрихкодів не знайдено"
+
+            requests.post(
+                f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages",
+                headers={
+                    "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "messaging_product": "whatsapp",
+                    "to": phone,
+                    "type": "interactive",
+                    "interactive": {
+                        "type": "button",
+                        "body": {
+                            "text": text
+                        },
+                        "action": {
+                            "buttons": [
+                                {
+                                    "type": "reply",
+                                    "reply": {
+                                        "id": f"done_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                                        "title": "Готово"
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            )
 
             fname = f"photo_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
             url = upload_photo(img, fname)
             pending_reports[fname] = url
 
-            send_image(phone, url)
-            send_report_button(phone, fname)
-            send_text(phone, "------ ГОТОВО ------")
-
             update_used(row, used + 1)
-
-            # 🔥 ЛІЧИЛЬНИК ФОТО
             increment_global_counter()
 
         # ================== TEXT ==================
