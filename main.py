@@ -82,6 +82,7 @@ def search_gmail_attachments(doc):
 
     return files
 
+
 def send_text(phone, text, reply_to=None):
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
@@ -97,6 +98,20 @@ def send_text(phone, text, reply_to=None):
         payload["context"] = {"message_id": reply_to}
 
     requests.post(url, headers=headers, json=payload)
+
+
+def send_image(phone, image_url):
+    url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+
+    data = {
+        "messaging_product": "whatsapp",
+        "to": phone,
+        "type": "image",
+        "image": {"link": image_url}
+    }
+
+    requests.post(url, headers=headers, json=data)
 
 
 def send_report_button(phone, fname):
@@ -153,12 +168,7 @@ def increment_global_counter():
             range="Лист1!E1"
         ).execute()
 
-        current = 0
-        try:
-            current = int(res.get("values", [["0"]])[0][0])
-        except:
-            current = 0
-
+        current = int(res.get("values", [["0"]])[0][0]) if res.get("values") else 0
         current += 1
 
         sheet.update(
@@ -277,52 +287,52 @@ def webhook():
             update_used(row, used + 1)
             increment_global_counter()
 
-    
+        # ================== TEXT ==================
+        elif msg["type"] in ["text", "interactive"]:
 
-# ================== TEXT ==================
-elif msg["type"] in ["text", "interactive"]:
+            payload = ""
 
-    payload = ""
+            if msg["type"] == "text":
+                payload = msg["text"]["body"]
+            else:
+                payload = msg["interactive"]["button_reply"]["id"]
 
-    if msg["type"] == "text":
-        payload = msg["text"]["body"]
-    else:
-        payload = msg["interactive"]["button_reply"]["id"]
+            if payload and payload.startswith("report_"):
+                fname = payload.replace("report_", "")
 
-    if payload and payload.startswith("report_"):
-        fname = payload.replace("report_", "")
+                if fname in pending_reports:
+                    send_text(ADMIN_PHONE, f"⚠️ Скарга від {phone}")
+                    send_image(ADMIN_PHONE, pending_reports[fname])
 
-        if fname in pending_reports:
-            send_text(ADMIN_PHONE, f"⚠️ Скарга від {phone}")
-            send_image(ADMIN_PHONE, pending_reports[fname])
+                send_text(phone, "Скарга відправлена ✅")
 
-        send_text(phone, "Скарга відправлена ✅")
+            else:
+                files = search_gmail_attachments(payload)
 
-    else:
-        files = search_gmail_attachments(payload)
+                if not files:
+                    send_text(phone, "❌ Вкладень не знайдено")
+                else:
+                    for f in files:
+                        media = MediaIoBaseUpload(io.BytesIO(f["data"]), mimetype='application/octet-stream')
 
-        if not files:
-            send_text(phone, "❌ Вкладень не знайдено")
-        else:
-            for f in files:
-                media = MediaIoBaseUpload(
-                    io.BytesIO(f["data"]),
-                    mimetype='application/octet-stream'
-                )
+                        file_drive = drive.files().create(
+                            body={'name': f["name"], 'parents': [GDRIVE_FOLDER_ID]},
+                            media_body=media,
+                            fields='id'
+                        ).execute()
 
-                file_drive = drive.files().create(
-                    body={'name': f["name"], 'parents': [GDRIVE_FOLDER_ID]},
-                    media_body=media,
-                    fields='id'
-                ).execute()
+                        drive.permissions().create(
+                            fileId=file_drive['id'],
+                            body={'type': 'anyone', 'role': 'reader'}
+                        ).execute()
 
-                drive.permissions().create(
-                    fileId=file_drive['id'],
-                    body={'type': 'anyone', 'role': 'reader'}
-                ).execute()
+                        url = f"https://drive.google.com/uc?id={file_drive['id']}"
+                        send_text(phone, f"📎 {f['name']}: {url}")
 
-                url = f"https://drive.google.com/uc?id={file_drive['id']}"
-                send_text(phone, f"📎 {f['name']}: {url}")
+    except Exception as e:
+        print("ERROR:", e)
+
+    return "ok", 200
 
 
 if __name__ == "__main__":
