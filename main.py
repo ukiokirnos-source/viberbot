@@ -83,26 +83,21 @@ def search_gmail_attachments(doc):
     return files
 
 
-def send_text(phone, text):
+def send_text(phone, text, reply_to=None):
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
-    requests.post(url, headers=headers, json={
+
+    payload = {
         "messaging_product": "whatsapp",
         "to": phone,
         "type": "text",
         "text": {"body": text}
-    })
+    }
 
+    if reply_to:
+        payload["context"] = {"message_id": reply_to}
 
-def send_image(phone, image_url):
-    url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
-    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
-    requests.post(url, headers=headers, json={
-        "messaging_product": "whatsapp",
-        "to": phone,
-        "type": "image",
-        "image": {"link": image_url}
-    })
+    requests.post(url, headers=headers, json=payload)
 
 
 def send_report_button(phone, fname):
@@ -149,7 +144,6 @@ def upload_photo(bytes_, name):
     return f"https://drive.google.com/uc?id={file['id']}"
 
 
-# ================== GLOBAL COUNTER FIX ==================
 def increment_global_counter():
     try:
         sheet = sheets.spreadsheets().values()
@@ -178,7 +172,6 @@ def increment_global_counter():
         print("TOTAL ERROR:", e)
 
 
-# ================== SHEETS ==================
 def get_user(phone):
     rows = sheets.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID,
@@ -209,9 +202,7 @@ def update_used(row, value):
     ).execute()
 
 
-
-
-           # ================== WEBHOOK ==================
+# ================== WEBHOOK ==================
 @app.route("/webhook", methods=["GET", "POST"])
 def webhook():
     data = request.get_json()
@@ -255,7 +246,6 @@ def webhook():
             ).json()
 
             if "url" not in media_resp:
-                print("MEDIA ERROR:", media_resp)
                 return "ok", 200
 
             media_url = media_resp["url"]
@@ -273,17 +263,15 @@ def webhook():
             except:
                 barcodes = []
 
-            # ================== НОВА ЛОГІКА ВІДПОВІДІ ==================
             response_text = "\n".join(barcodes) if barcodes else "❌ Штрихкодів не знайдено"
-            response_text += "\n---готово--"
 
-            send_text(phone, response_text)
+            # 🔥 ВІДПОВІДЬ НА САМЕ ФОТО
+            send_text(phone, response_text, reply_to=msg["id"])
 
             fname = f"photo_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
             url = upload_photo(img, fname)
             pending_reports[fname] = url
 
-            send_image(phone, url)
             send_report_button(phone, fname)
 
             update_used(row, used + 1)
@@ -303,7 +291,7 @@ def webhook():
 
                 if fname in pending_reports:
                     send_text(ADMIN_PHONE, f"⚠️ Скарга від {phone}")
-                    send_image(ADMIN_PHONE, pending_reports[fname])
+                    send_text(ADMIN_PHONE, pending_reports[fname])
 
                 send_text(phone, "Скарга відправлена ✅")
 
