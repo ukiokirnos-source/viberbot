@@ -209,7 +209,9 @@ def update_used(row, value):
     ).execute()
 
 
-# ================== WEBHOOK ==================
+
+
+           # ================== WEBHOOK ==================
 @app.route("/webhook", methods=["GET", "POST"])
 def webhook():
     data = request.get_json()
@@ -271,7 +273,11 @@ def webhook():
             except:
                 barcodes = []
 
-            send_text(phone, "\n".join(barcodes) if barcodes else "❌ Штрихкодів не знайдено")
+            # ================== НОВА ЛОГІКА ВІДПОВІДІ ==================
+            response_text = "\n".join(barcodes) if barcodes else "❌ Штрихкодів не знайдено"
+            response_text += "\n---готово--"
+
+            send_text(phone, response_text)
 
             fname = f"photo_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
             url = upload_photo(img, fname)
@@ -279,11 +285,8 @@ def webhook():
 
             send_image(phone, url)
             send_report_button(phone, fname)
-            send_text(phone, "------ ГОТОВО ------")
 
             update_used(row, used + 1)
-
-            # 🔥 ЛІЧИЛЬНИК ФОТО
             increment_global_counter()
 
         # ================== TEXT ==================
