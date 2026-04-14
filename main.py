@@ -277,29 +277,52 @@ def webhook():
             update_used(row, used + 1)
             increment_global_counter()
 
-        # ================== TEXT ==================
-        elif msg["type"] in ["text", "interactive"]:
+    
 
-            payload = ""
+# ================== TEXT ==================
+elif msg["type"] in ["text", "interactive"]:
 
-            if msg["type"] == "text":
-                payload = msg["text"]["body"]
-            else:
-                payload = msg["interactive"]["button_reply"]["id"]
+    payload = ""
 
-            if payload and payload.startswith("report_"):
-                fname = payload.replace("report_", "")
+    if msg["type"] == "text":
+        payload = msg["text"]["body"]
+    else:
+        payload = msg["interactive"]["button_reply"]["id"]
 
-                if fname in pending_reports:
-                    send_text(ADMIN_PHONE, f"⚠️ Скарга від {phone}")
-                    send_text(ADMIN_PHONE, pending_reports[fname])
+    if payload and payload.startswith("report_"):
+        fname = payload.replace("report_", "")
 
-                send_text(phone, "Скарга відправлена ✅")
+        if fname in pending_reports:
+            send_text(ADMIN_PHONE, f"⚠️ Скарга від {phone}")
+            send_image(ADMIN_PHONE, pending_reports[fname])
 
-    except Exception as e:
-        print("ERROR:", e)
+        send_text(phone, "Скарга відправлена ✅")
 
-    return "ok", 200
+    else:
+        files = search_gmail_attachments(payload)
+
+        if not files:
+            send_text(phone, "❌ Вкладень не знайдено")
+        else:
+            for f in files:
+                media = MediaIoBaseUpload(
+                    io.BytesIO(f["data"]),
+                    mimetype='application/octet-stream'
+                )
+
+                file_drive = drive.files().create(
+                    body={'name': f["name"], 'parents': [GDRIVE_FOLDER_ID]},
+                    media_body=media,
+                    fields='id'
+                ).execute()
+
+                drive.permissions().create(
+                    fileId=file_drive['id'],
+                    body={'type': 'anyone', 'role': 'reader'}
+                ).execute()
+
+                url = f"https://drive.google.com/uc?id={file_drive['id']}"
+                send_text(phone, f"📎 {f['name']}: {url}")
 
 
 if __name__ == "__main__":
