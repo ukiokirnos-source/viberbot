@@ -168,7 +168,14 @@ def increment_global_counter():
             range="Лист1!E1"
         ).execute()
 
-        current = int(res.get("values", [["0"]])[0][0]) if res.get("values") else 0
+        current = 0
+
+        if "values" in res and res["values"]:
+            try:
+                current = int(res["values"][0][0])
+            except:
+                current = 0
+
         current += 1
 
         sheet.update(
