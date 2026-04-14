@@ -148,41 +148,35 @@ def upload_photo(bytes_, name):
 
     return f"https://drive.google.com/uc?id={file['id']}"
 
-# ================== LOG PHOTO ==================
-def log_photo():
-    try:
-        sheets.spreadsheets().values().append(
-            spreadsheetId=SPREADSHEET_ID,
-            range="Лист1!E:E",
-            valueInputOption="RAW",
-            body={"values": [[datetime.datetime.now().isoformat()]]}
-        ).execute()
-    except Exception as e:
-        print("LOG ERROR:", e)
 
-# ================== GLOBAL COUNTER ==================
+# ================== GLOBAL COUNTER FIX ==================
 def increment_global_counter():
     try:
         sheet = sheets.spreadsheets().values()
 
         res = sheet.get(
             spreadsheetId=SPREADSHEET_ID,
-            range="Лист1!E2:E"
+            range="Лист1!E1"
         ).execute()
 
-        rows = res.get("values", [])
+        current = 0
+        try:
+            current = int(res.get("values", [["0"]])[0][0])
+        except:
+            current = 0
 
-        total = len(rows)
+        current += 1
 
         sheet.update(
             spreadsheetId=SPREADSHEET_ID,
-            range="E1",
+            range="Лист1!E1",
             valueInputOption="RAW",
-            body={"values": [[total]]}
+            body={"values": [[current]]}
         ).execute()
 
     except Exception as e:
         print("TOTAL ERROR:", e)
+
 
 # ================== SHEETS ==================
 def get_user(phone):
@@ -214,6 +208,7 @@ def update_used(row, value):
         body={"values": [[value]]}
     ).execute()
 
+
 # ================== WEBHOOK ==================
 @app.route("/webhook", methods=["GET", "POST"])
 def webhook():
@@ -234,6 +229,7 @@ def webhook():
         except:
             name = phone
 
+        # ================== IMAGE ==================
         if msg["type"] == "image":
 
             row, user = get_user(phone)
@@ -287,9 +283,10 @@ def webhook():
 
             update_used(row, used + 1)
 
-            log_photo()
+            # 🔥 ЛІЧИЛЬНИК ФОТО
             increment_global_counter()
 
+        # ================== TEXT ==================
         elif msg["type"] in ["text", "interactive"]:
 
             payload = ""
