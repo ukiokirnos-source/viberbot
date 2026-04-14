@@ -290,8 +290,10 @@ def webhook():
                 fname = payload.replace("report_", "")
 
                 if fname in pending_reports:
-                    send_text(ADMIN_PHONE, f"⚠️ Скарга від {phone}")
-                    send_text(ADMIN_PHONE, pending_reports[fname])
+    send_text(ADMIN_PHONE, f"⚠️ Скарга від {phone}")
+
+    # відправка фото як файл (не лінк)
+    send_image(ADMIN_PHONE, pending_reports[fname])
 
                 send_text(phone, "Скарга відправлена ✅")
 
