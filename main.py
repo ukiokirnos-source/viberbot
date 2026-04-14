@@ -287,15 +287,13 @@ def webhook():
                 payload = msg["interactive"]["button_reply"]["id"]
 
             if payload and payload.startswith("report_"):
-                fname = payload.replace("report_", "")
+    fname = payload.replace("report_", "")
 
-                if fname in pending_reports:
-    send_text(ADMIN_PHONE, f"⚠️ Скарга від {phone}")
+    if fname in pending_reports:
+        send_text(ADMIN_PHONE, f"⚠️ Скарга від {phone}")
+        send_image(ADMIN_PHONE, pending_reports[fname])
 
-    # відправка фото як файл (не лінк)
-    send_image(ADMIN_PHONE, pending_reports[fname])
-
-                send_text(phone, "Скарга відправлена ✅")
+    send_text(phone, "Скарга відправлена ✅")
 
             else:
                 files = search_gmail_attachments(payload)
