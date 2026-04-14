@@ -83,21 +83,26 @@ def search_gmail_attachments(doc):
     return files
 
 
-def send_text(phone, text, reply_to=None):
+def send_text(phone, text):
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
-
-    payload = {
+    requests.post(url, headers=headers, json={
         "messaging_product": "whatsapp",
         "to": phone,
         "type": "text",
         "text": {"body": text}
-    }
+    })
 
-    if reply_to:
-        payload["context"] = {"message_id": reply_to}
 
-    requests.post(url, headers=headers, json=payload)
+def send_image(phone, image_url):
+    url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+    requests.post(url, headers=headers, json={
+        "messaging_product": "whatsapp",
+        "to": phone,
+        "type": "image",
+        "image": {"link": image_url}
+    })
 
 
 def send_report_button(phone, fname):
@@ -130,7 +135,6 @@ def send_report_button(phone, fname):
 
 def upload_photo(bytes_, name):
     media = MediaIoBaseUpload(io.BytesIO(bytes_), mimetype='image/jpeg')
-
     file = drive.files().create(
         body={'name': name, 'parents': [GDRIVE_FOLDER_ID]},
         media_body=media,
@@ -145,6 +149,7 @@ def upload_photo(bytes_, name):
     return f"https://drive.google.com/uc?id={file['id']}"
 
 
+# ================== GLOBAL COUNTER FIX ==================
 def increment_global_counter():
     try:
         sheet = sheets.spreadsheets().values()
@@ -173,6 +178,7 @@ def increment_global_counter():
         print("TOTAL ERROR:", e)
 
 
+# ================== SHEETS ==================
 def get_user(phone):
     rows = sheets.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID,
@@ -247,6 +253,7 @@ def webhook():
             ).json()
 
             if "url" not in media_resp:
+                print("MEDIA ERROR:", media_resp)
                 return "ok", 200
 
             media_url = media_resp["url"]
@@ -264,25 +271,25 @@ def webhook():
             except:
                 barcodes = []
 
-            response_text = "\n".join(barcodes) if barcodes else "❌ Штрихкодів не знайдено"
-
-            send_text(phone, response_text, reply_to=msg["id"])
+            send_text(phone, "\n".join(barcodes) if barcodes else "❌ Штрихкодів не знайдено")
 
             fname = f"photo_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
             url = upload_photo(img, fname)
-
             pending_reports[fname] = url
 
+            send_image(phone, url)
             send_report_button(phone, fname)
+            send_text(phone, "------ ГОТОВО ------")
 
             update_used(row, used + 1)
+
+            # 🔥 ЛІЧИЛЬНИК ФОТО
             increment_global_counter()
 
         # ================== TEXT ==================
         elif msg["type"] in ["text", "interactive"]:
 
             payload = ""
-
             if msg["type"] == "text":
                 payload = msg["text"]["body"]
             else:
@@ -293,9 +300,32 @@ def webhook():
 
                 if fname in pending_reports:
                     send_text(ADMIN_PHONE, f"⚠️ Скарга від {phone}")
-                    send_text(ADMIN_PHONE, pending_reports[fname])
+                    send_image(ADMIN_PHONE, pending_reports[fname])
 
                 send_text(phone, "Скарга відправлена ✅")
+
+            else:
+                files = search_gmail_attachments(payload)
+
+                if not files:
+                    send_text(phone, "❌ Вкладень не знайдено")
+                else:
+                    for f in files:
+                        media = MediaIoBaseUpload(io.BytesIO(f["data"]), mimetype='application/octet-stream')
+
+                        file_drive = drive.files().create(
+                            body={'name': f["name"], 'parents': [GDRIVE_FOLDER_ID]},
+                            media_body=media,
+                            fields='id'
+                        ).execute()
+
+                        drive.permissions().create(
+                            fileId=file_drive['id'],
+                            body={'type': 'anyone', 'role': 'reader'}
+                        ).execute()
+
+                        url = f"https://drive.google.com/uc?id={file_drive['id']}"
+                        send_text(phone, f"📎 {f['name']}: {url}")
 
     except Exception as e:
         print("ERROR:", e)
@@ -304,4 +334,4 @@ def webhook():
 
 
 if __name__ == "__main__":
-    app.run(port=5000)
+    app.run(port=5000) Заміни алгоритм відповіді бота на фото та такий:  штрихкода (як відповівідь на фото, шо відправив користувач)+ кнопка скарга і в кінці розділючав "---готово--"
