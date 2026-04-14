@@ -82,7 +82,6 @@ def search_gmail_attachments(doc):
 
     return files
 
-
 def send_text(phone, text, reply_to=None):
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
