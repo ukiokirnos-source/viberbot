@@ -2,11 +2,10 @@ import io
 import base64
 import requests
 import datetime
-import hashlib
 import re
 import time
 import threading
-from flask import Flask, request, Response
+from flask import Flask, request
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -27,49 +26,123 @@ SPREADSHEET_ID = "1W_fiI8FiwDn0sKq0ks7rGcWhXB0HEcHxar1uK4GL1P8"
 # ================== INIT ==================
 app = Flask(__name__)
 
-gmail = build("gmail", "v1", credentials=Credentials.from_authorized_user_file(GMAIL_TOKEN_FILE))
-drive = build("drive", "v3", credentials=Credentials.from_authorized_user_file(GMAIL_TOKEN_FILE))
-sheets = build("sheets", "v4", credentials=Credentials.from_authorized_user_file(GMAIL_TOKEN_FILE))
+creds = Credentials.from_authorized_user_file(GMAIL_TOKEN_FILE)
+
+gmail = build("gmail", "v1", credentials=creds)
+drive = build("drive", "v3", credentials=creds)
+sheets = build("sheets", "v4", credentials=creds)
 
 pending_reports = {}
 
 # ================== HEADERS ==================
 def init_headers():
     try:
+        # тільки A-D, E не чіпаємо
         sheets.spreadsheets().values().update(
             spreadsheetId=SPREADSHEET_ID,
-            range="Лист1!A1:E1",
+            range="Лист1!A1:D1",
             valueInputOption="RAW",
-            body={"values": [["PHONE", "NAME", "DAILY_LIMIT", "USED_TODAY", "TOTAL_USED"]]}
+            body={
+                "values": [[
+                    "PHONE",
+                    "NAME",
+                    "DAILY_LIMIT",
+                    "USED_TODAY"
+                ]]
+            }
         ).execute()
-    except:
-        pass
+
+        # якщо E1 порожня — ставимо 0
+        res = sheets.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Лист1!E1"
+        ).execute()
+
+        if "values" not in res or not res["values"]:
+            sheets.spreadsheets().values().update(
+                spreadsheetId=SPREADSHEET_ID,
+                range="Лист1!E1",
+                valueInputOption="RAW",
+                body={"values": [[0]]}
+            ).execute()
+
+    except Exception as e:
+        print("HEADER ERROR:", e)
+
 
 init_headers()
+
+
+# ================== RESET DAILY ==================
+def reset_daily_usage():
+    while True:
+        now = datetime.datetime.now()
+
+        tomorrow = now + datetime.timedelta(days=1)
+        midnight = datetime.datetime.combine(
+            tomorrow.date(),
+            datetime.time.min
+        )
+
+        sleep_seconds = (midnight - now).total_seconds()
+        time.sleep(sleep_seconds)
+
+        try:
+            rows = sheets.spreadsheets().values().get(
+                spreadsheetId=SPREADSHEET_ID,
+                range="Лист1!D2:D"
+            ).execute().get("values", [])
+
+            if rows:
+                zeros = [[0] for _ in rows]
+
+                sheets.spreadsheets().values().update(
+                    spreadsheetId=SPREADSHEET_ID,
+                    range=f"Лист1!D2:D{len(rows)+1}",
+                    valueInputOption="RAW",
+                    body={"values": zeros}
+                ).execute()
+
+                print("✅ DAILY LIMIT RESET")
+
+        except Exception as e:
+            print("RESET ERROR:", e)
+
 
 # ================== HELPERS ==================
 def normalize_barcode(code):
     if not code:
         return None
+
     code = re.sub(r'[^0-9]', '', str(code))
     return code if code else None
 
 
 def search_gmail_attachments(doc):
     query = f"filename:{doc} newer_than:14d"
-    res = gmail.users().messages().list(userId="me", q=query).execute()
-    messages = res.get("messages", [])
 
+    res = gmail.users().messages().list(
+        userId="me",
+        q=query
+    ).execute()
+
+    messages = res.get("messages", [])
     files = []
 
     for m in messages:
-        msg = gmail.users().messages().get(userId="me", id=m["id"]).execute()
+        msg = gmail.users().messages().get(
+            userId="me",
+            id=m["id"]
+        ).execute()
+
         parts = msg["payload"].get("parts", [])
 
         for p in parts:
             filename = p.get("filename")
+
             if filename and doc in filename:
                 att_id = p["body"].get("attachmentId")
+
                 if att_id:
                     att = gmail.users().messages().attachments().get(
                         userId="me",
@@ -78,14 +151,22 @@ def search_gmail_attachments(doc):
                     ).execute()
 
                     data = base64.urlsafe_b64decode(att["data"])
-                    files.append({"name": filename, "data": data})
+
+                    files.append({
+                        "name": filename,
+                        "data": data
+                    })
 
     return files
 
 
 def send_text(phone, text, reply_to=None):
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
-    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
 
     payload = {
         "messaging_product": "whatsapp",
@@ -102,58 +183,75 @@ def send_text(phone, text, reply_to=None):
 
 def send_image(phone, image_url):
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
-    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
 
-    data = {
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
         "messaging_product": "whatsapp",
         "to": phone,
         "type": "image",
         "image": {"link": image_url}
     }
 
-    requests.post(url, headers=headers, json=data)
+    requests.post(url, headers=headers, json=payload)
 
 
 def send_report_button(phone, fname):
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
-    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
 
-    data = {
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
         "messaging_product": "whatsapp",
         "to": phone,
         "type": "interactive",
         "interactive": {
             "type": "button",
-            "body": {"text": "Є проблема з фото?"},
+            "body": {
+                "text": "Є проблема з фото?"
+            },
             "action": {
-                "buttons": [
-                    {
-                        "type": "reply",
-                        "reply": {
-                            "id": f"report_{fname}",
-                            "title": "⚠️ Скарга"
-                        }
+                "buttons": [{
+                    "type": "reply",
+                    "reply": {
+                        "id": f"report_{fname}",
+                        "title": "⚠️ Скарга"
                     }
-                ]
+                }]
             }
         }
     }
 
-    requests.post(url, headers=headers, json=data)
+    requests.post(url, headers=headers, json=payload)
 
 
 def upload_photo(bytes_, name):
-    media = MediaIoBaseUpload(io.BytesIO(bytes_), mimetype='image/jpeg')
+    media = MediaIoBaseUpload(
+        io.BytesIO(bytes_),
+        mimetype="image/jpeg"
+    )
 
     file = drive.files().create(
-        body={'name': name, 'parents': [GDRIVE_FOLDER_ID]},
+        body={
+            "name": name,
+            "parents": [GDRIVE_FOLDER_ID]
+        },
         media_body=media,
-        fields='id'
+        fields="id"
     ).execute()
 
     drive.permissions().create(
-        fileId=file['id'],
-        body={'type': 'anyone', 'role': 'reader'}
+        fileId=file["id"],
+        body={
+            "type": "anyone",
+            "role": "reader"
+        }
     ).execute()
 
     return f"https://drive.google.com/uc?id={file['id']}"
@@ -198,6 +296,7 @@ def get_user(phone):
     for i, r in enumerate(rows):
         if r and r[0] == phone:
             return i + 1, r
+
     return None, None
 
 
@@ -239,7 +338,7 @@ def webhook():
         except:
             name = phone
 
-        # ================== IMAGE ==================
+        # ========= IMAGE =========
         if msg["type"] == "image":
 
             row, user = get_user(phone)
@@ -273,10 +372,20 @@ def webhook():
             ).content
 
             try:
-                r = requests.post(WEB_APP_URL, json={"image": base64.b64encode(img).decode()}, timeout=20)
+                r = requests.post(
+                    WEB_APP_URL,
+                    json={"image": base64.b64encode(img).decode()},
+                    timeout=20
+                )
+
                 data_bc = r.json() if r.ok else {}
                 raw = data_bc.get("barcodes", []) or data_bc.get("result", [])
-                barcodes = [normalize_barcode(b) for b in raw if b]
+
+                barcodes = [
+                    normalize_barcode(b)
+                    for b in raw if b
+                ]
+
             except:
                 barcodes = []
 
@@ -294,22 +403,26 @@ def webhook():
             update_used(row, used + 1)
             increment_global_counter()
 
-        # ================== TEXT ==================
+        # ========= TEXT =========
         elif msg["type"] in ["text", "interactive"]:
-
-            payload = ""
 
             if msg["type"] == "text":
                 payload = msg["text"]["body"]
             else:
                 payload = msg["interactive"]["button_reply"]["id"]
 
-            if payload and payload.startswith("report_"):
+            if payload.startswith("report_"):
                 fname = payload.replace("report_", "")
 
                 if fname in pending_reports:
-                    send_text(ADMIN_PHONE, f"⚠️ Скарга від {phone}")
-                    send_image(ADMIN_PHONE, pending_reports[fname])
+                    send_text(
+                        ADMIN_PHONE,
+                        f"⚠️ Скарга від {phone}"
+                    )
+                    send_image(
+                        ADMIN_PHONE,
+                        pending_reports[fname]
+                    )
 
                 send_text(phone, "Скарга відправлена ✅")
 
@@ -320,21 +433,34 @@ def webhook():
                     send_text(phone, "❌ Вкладень не знайдено")
                 else:
                     for f in files:
-                        media = MediaIoBaseUpload(io.BytesIO(f["data"]), mimetype='application/octet-stream')
+                        media = MediaIoBaseUpload(
+                            io.BytesIO(f["data"]),
+                            mimetype="application/octet-stream"
+                        )
 
                         file_drive = drive.files().create(
-                            body={'name': f["name"], 'parents': [GDRIVE_FOLDER_ID]},
+                            body={
+                                "name": f["name"],
+                                "parents": [GDRIVE_FOLDER_ID]
+                            },
                             media_body=media,
-                            fields='id'
+                            fields="id"
                         ).execute()
 
                         drive.permissions().create(
-                            fileId=file_drive['id'],
-                            body={'type': 'anyone', 'role': 'reader'}
+                            fileId=file_drive["id"],
+                            body={
+                                "type": "anyone",
+                                "role": "reader"
+                            }
                         ).execute()
 
                         url = f"https://drive.google.com/uc?id={file_drive['id']}"
-                        send_text(phone, f"📎 {f['name']}: {url}")
+
+                        send_text(
+                            phone,
+                            f"📎 {f['name']}: {url}"
+                        )
 
     except Exception as e:
         print("ERROR:", e)
@@ -343,4 +469,9 @@ def webhook():
 
 
 if __name__ == "__main__":
+    threading.Thread(
+        target=reset_daily_usage,
+        daemon=True
+    ).start()
+
     app.run(port=5000)
