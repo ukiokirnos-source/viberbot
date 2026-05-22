@@ -10,6 +10,7 @@ from flask import Flask, request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
+from zoneinfo import ZoneInfo
 
 # ================== НАЛАШТУВАННЯ ==================
 WHATSAPP_TOKEN = "EAAwJZC7glYnQBRB8Wy8uUb22UsZAUMYYoFEaZCyUR9HduC963ZBEeheqsQhIDGaTbyBVKG2Ks5xMqryQRBEBC1A67FhawW0pkUrFkSRfKl7qhL8p9RrdA6AZAatMXcBM2mlf0n9rpkFTEDWJKI5PZBgW9LVLieea8ZAZBrZCT4epEV9qvhCMdGVAgSIF8ZAbXJqktAZBAZDZD"
@@ -78,19 +79,25 @@ init_headers()
 
 # ================== RESET DAILY ==================
 def reset_daily_usage():
+    kyiv_tz = ZoneInfo("Europe/Kyiv")
+
     while True:
-        now = datetime.datetime.now()
-
-        tomorrow = now + datetime.timedelta(days=1)
-        midnight = datetime.datetime.combine(
-            tomorrow.date(),
-            datetime.time.min
-        )
-
-        sleep_seconds = (midnight - now).total_seconds()
-        time.sleep(sleep_seconds)
-
         try:
+            now = datetime.datetime.now(kyiv_tz)
+
+            # наступна північ по Києву
+            tomorrow = now + datetime.timedelta(days=1)
+            midnight = datetime.datetime.combine(
+                tomorrow.date(),
+                datetime.time.min,
+                tzinfo=kyiv_tz
+            )
+
+            sleep_seconds = (midnight - now).total_seconds()
+
+            print(f"До reset лишилось: {sleep_seconds:.0f} сек")
+            time.sleep(sleep_seconds)
+
             rows = sheets.spreadsheets().values().get(
                 spreadsheetId=SPREADSHEET_ID,
                 range="Лист1!D2:D"
@@ -106,10 +113,11 @@ def reset_daily_usage():
                     body={"values": zeros}
                 ).execute()
 
-                print("✅ DAILY LIMIT RESET")
+                print("✅ DAILY LIMIT RESET (Kyiv time)")
 
         except Exception as e:
             print("RESET ERROR:", e)
+            time.sleep(60)
 
 
 # ================== CLEANUP CACHE ==================
