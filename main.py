@@ -34,10 +34,14 @@ sheets = build("sheets", "v4", credentials=creds)
 
 pending_reports = {}
 
+# антидубль
+processed_messages = {}
+processed_media = {}
+
+
 # ================== HEADERS ==================
 def init_headers():
     try:
-        # тільки A-D, E не чіпаємо
         sheets.spreadsheets().values().update(
             spreadsheetId=SPREADSHEET_ID,
             range="Лист1!A1:D1",
@@ -52,7 +56,6 @@ def init_headers():
             }
         ).execute()
 
-        # якщо E1 порожня — ставимо 0
         res = sheets.spreadsheets().values().get(
             spreadsheetId=SPREADSHEET_ID,
             range="Лист1!E1"
@@ -107,6 +110,31 @@ def reset_daily_usage():
 
         except Exception as e:
             print("RESET ERROR:", e)
+
+
+# ================== CLEANUP CACHE ==================
+def cleanup_processed():
+    while True:
+        now = time.time()
+
+        msg_delete = [
+            k for k, v in processed_messages.items()
+            if now - v > 3600
+        ]
+
+        media_delete = [
+            k for k, v in processed_media.items()
+            if now - v > 3600
+        ]
+
+        for k in msg_delete:
+            del processed_messages[k]
+
+        for k in media_delete:
+            del processed_media[k]
+
+        print("🧹 cache cleaned")
+        time.sleep(300)
 
 
 # ================== HELPERS ==================
@@ -331,6 +359,16 @@ def webhook():
             return "ok", 200
 
         msg = messages[0]
+
+        # ========= АНТИДУБЛЬ ПО MESSAGE ID =========
+        message_id = msg["id"]
+
+        if message_id in processed_messages:
+            print("DUPLICATE MESSAGE:", message_id)
+            return "ok", 200
+
+        processed_messages[message_id] = time.time()
+
         phone = msg["from"]
 
         try:
@@ -340,6 +378,15 @@ def webhook():
 
         # ========= IMAGE =========
         if msg["type"] == "image":
+
+            media_id = msg["image"]["id"]
+
+            # антидубль по фото
+            if media_id in processed_media:
+                print("DUPLICATE MEDIA:", media_id)
+                return "ok", 200
+
+            processed_media[media_id] = time.time()
 
             row, user = get_user(phone)
 
@@ -353,8 +400,6 @@ def webhook():
             if used >= limit:
                 send_text(phone, "🚫 Ліміт вичерпано")
                 return "ok", 200
-
-            media_id = msg["image"]["id"]
 
             media_resp = requests.get(
                 f"https://graph.facebook.com/v18.0/{media_id}",
@@ -391,7 +436,7 @@ def webhook():
 
             response_text = "\n".join(barcodes) if barcodes else "❌ Штрихкодів не знайдено"
 
-            send_text(phone, response_text, reply_to=msg["id"])
+            send_text(phone, response_text, reply_to=message_id)
 
             fname = f"photo_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
             url = upload_photo(img, fname)
@@ -471,6 +516,11 @@ def webhook():
 if __name__ == "__main__":
     threading.Thread(
         target=reset_daily_usage,
+        daemon=True
+    ).start()
+
+    threading.Thread(
+        target=cleanup_processed,
         daemon=True
     ).start()
 
