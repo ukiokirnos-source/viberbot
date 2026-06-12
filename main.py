@@ -172,7 +172,46 @@ def send_document(phone, file_bytes, filename):
     }
 
     requests.post(url, headers=headers, json=payload)
+def search_gmail_attachments(doc):
+    query = f"filename:{doc} newer_than:14d"
 
+    res = gmail.users().messages().list(
+        userId="me",
+        q=query
+    ).execute()
+
+    messages = res.get("messages", [])
+    files = []
+
+    for m in messages:
+        msg = gmail.users().messages().get(
+            userId="me",
+            id=m["id"]
+        ).execute()
+
+        parts = msg["payload"].get("parts", [])
+
+        for p in parts:
+            filename = p.get("filename")
+
+            if filename and doc in filename:
+                att_id = p["body"].get("attachmentId")
+
+                if att_id:
+                    att = gmail.users().messages().attachments().get(
+                        userId="me",
+                        messageId=m["id"],
+                        id=att_id
+                    ).execute()
+
+                    data = base64.urlsafe_b64decode(att["data"])
+
+                    files.append({
+                        "name": filename,
+                        "data": data
+                    })
+
+    return files
 
 # ================== WEBHOOK ==================
 @app.route("/webhook", methods=["POST"])
