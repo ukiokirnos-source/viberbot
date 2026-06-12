@@ -34,17 +34,18 @@ drive = build("drive", "v3", credentials=creds)
 sheets = build("sheets", "v4", credentials=creds)
 
 pending_reports = {}
-
 processed_messages = {}
 processed_media = {}
 
+
+# ================== HEADERS ==================
 def init_headers():
     try:
         sheets.spreadsheets().values().update(
             spreadsheetId=SPREADSHEET_ID,
             range="Лист1!A1:D1",
             valueInputOption="RAW",
-            body={"values": [["PHONE","NAME","DAILY_LIMIT","USED_TODAY"]]}
+            body={"values": [["PHONE", "NAME", "DAILY_LIMIT", "USED_TODAY"]]}
         ).execute()
 
         res = sheets.spreadsheets().values().get(
@@ -59,19 +60,29 @@ def init_headers():
                 valueInputOption="RAW",
                 body={"values": [[0]]}
             ).execute()
+
     except Exception as e:
         print("HEADER ERROR:", e)
 
 init_headers()
 
+
+# ================== RESET DAILY ==================
 def reset_daily_usage():
     kyiv_tz = ZoneInfo("Europe/Kyiv")
+
     while True:
         try:
             now = datetime.datetime.now(kyiv_tz)
             tomorrow = now + datetime.timedelta(days=1)
-            midnight = datetime.datetime.combine(tomorrow.date(), datetime.time.min, tzinfo=kyiv_tz)
-            time.sleep((midnight - now).total_seconds())
+            midnight = datetime.datetime.combine(
+                tomorrow.date(),
+                datetime.time.min,
+                tzinfo=kyiv_tz
+            )
+
+            sleep_seconds = (midnight - now).total_seconds()
+            time.sleep(sleep_seconds)
 
             rows = sheets.spreadsheets().values().get(
                 spreadsheetId=SPREADSHEET_ID,
@@ -80,6 +91,7 @@ def reset_daily_usage():
 
             if rows:
                 zeros = [[0] for _ in rows]
+
                 sheets.spreadsheets().values().update(
                     spreadsheetId=SPREADSHEET_ID,
                     range=f"Лист1!D2:D{len(rows)+1}",
@@ -91,147 +103,120 @@ def reset_daily_usage():
             print("RESET ERROR:", e)
             time.sleep(60)
 
+
+# ================== CLEANUP ==================
 def cleanup_processed():
     while True:
         now = time.time()
+
         for k in list(processed_messages):
             if now - processed_messages[k] > 3600:
                 del processed_messages[k]
+
         for k in list(processed_media):
             if now - processed_media[k] > 3600:
                 del processed_media[k]
+
         time.sleep(300)
 
+
+# ================== HELPERS ==================
 def normalize_barcode(code):
-    return re.sub(r'[^0-9]', '', str(code)) if code else None
+    if not code:
+        return None
+    code = re.sub(r'[^0-9]', '', str(code))
+    return code if code else None
+
 
 def send_text(phone, text, reply_to=None):
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
-    payload = {"messaging_product":"whatsapp","to":phone,"type":"text","text":{"body":text}}
-    if reply_to:
-        payload["context"] = {"message_id": reply_to}
-    requests.post(url, headers=headers, json=payload)
 
-def send_document(phone, file_bytes, filename):
-    upload_url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/media"
-    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
-    files = {"file": (filename, io.BytesIO(file_bytes))}
-    data = {"messaging_product":"whatsapp"}
-
-    r = requests.post(upload_url, headers=headers, files=files, data=data)
-    media_id = r.json()["id"]
-
-    msg_url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
     payload = {
-        "messaging_product":"whatsapp",
-        "to":phone,
-        "type":"document",
-        "document":{"id":media_id,"filename":filename}
+        "messaging_product": "whatsapp",
+        "to": phone,
+        "type": "text",
+        "text": {"body": text}
     }
 
-    requests.post(msg_url, headers=headers, json=payload)
+    if reply_to:
+        payload["context"] = {"message_id": reply_to}
 
-def get_user(phone):
-    rows = sheets.spreadsheets().values().get(
-        spreadsheetId=SPREADSHEET_ID,
-        range="Лист1!A:E"
-    ).execute().get("values", [])
+    requests.post(url, headers=headers, json=payload)
 
-    for i, r in enumerate(rows):
-        if r and r[0] == phone:
-            return i + 1, r
-    return None, None
 
-def create_user(phone, name):
-    sheets.spreadsheets().values().append(
-        spreadsheetId=SPREADSHEET_ID,
-        range="Лист1!A:E",
-        valueInputOption="RAW",
-        body={"values":[[phone,name,12,0,0]]}
-    ).execute()
+def send_document(phone, file_bytes, filename):
+    """ОЦЕ ГОЛОВНА ЗМІНА — відправка як ФАЙЛ"""
+    url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
 
-def update_used(row,value):
-    sheets.spreadsheets().values().update(
-        spreadsheetId=SPREADSHEET_ID,
-        range=f"Лист1!D{row}",
-        valueInputOption="RAW",
-        body={"values":[[value]]}
-    ).execute()
+    # WhatsApp Cloud API підтримує document через link або base64 upload
+    # тут робимо через base64 upload
+    media_upload = requests.post(
+        f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/media",
+        headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"},
+        files={"file": (filename, io.BytesIO(file_bytes), "application/octet-stream")},
+        data={"messaging_product": "whatsapp"}
+    ).json()
 
-@app.route("/webhook", methods=["GET","POST"])
+    media_id = media_upload.get("id")
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": phone,
+        "type": "document",
+        "document": {
+            "id": media_id,
+            "filename": filename
+        }
+    }
+
+    requests.post(url, headers=headers, json=payload)
+
+
+# ================== WEBHOOK ==================
+@app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.get_json()
+
     try:
         entry = data["entry"][0]["changes"][0]["value"]
         messages = entry.get("messages")
         if not messages:
-            return "ok",200
+            return "ok", 200
 
         msg = messages[0]
         message_id = msg["id"]
 
         if message_id in processed_messages:
-            return "ok",200
-        processed_messages[message_id]=time.time()
+            return "ok", 200
+
+        processed_messages[message_id] = time.time()
 
         phone = msg["from"]
 
-        try:
-            name = entry["contacts"][0]["profile"]["name"]
-        except:
-            name = phone
+        # ========= TEXT =========
+        if msg["type"] in ["text", "interactive"]:
 
-        if msg["type"]=="image":
-            media_id = msg["image"]["id"]
-            if media_id in processed_media:
-                return "ok",200
-            processed_media[media_id]=time.time()
-
-            media_resp = requests.get(
-                f"https://graph.facebook.com/v18.0/{media_id}",
-                headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
-            ).json()
-
-            media_url = media_resp.get("url")
-
-if not media_url:
-    print("MEDIA ERROR:", media_resp)
-    return "ok", 200
-
-img = requests.get(
-    media_url,
-    headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
-).content
-
-            # barcode service
-            try:
-                r = requests.post(WEB_APP_URL, json={"image": base64.b64encode(img).decode()}, timeout=20)
-                data_bc = r.json()
-                raw = data_bc.get("barcodes",[]) or data_bc.get("result",[])
-                barcodes = [normalize_barcode(b) for b in raw if b]
-            except:
-                barcodes=[]
-
-            send_text(phone, "\n".join(barcodes) if barcodes else "❌ Штрихкодів не знайдено", reply_to=message_id)
-
-            fname = f"photo_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
-            send_document(phone, img, fname)
-
-        elif msg["type"] in ["text","interactive"]:
-            payload = msg.get("text",{}).get("body") if msg["type"]=="text" else msg["interactive"]["button_reply"]["id"]
-
-            if payload and payload.startswith("report_"):
-                send_text(phone,"Скарга відправлена ✅")
+            if msg["type"] == "text":
+                payload = msg["text"]["body"]
             else:
-                send_text(phone,"❌ Вкладень через Drive більше нема, тепер через документ")
+                payload = msg["interactive"]["button_reply"]["id"]
+
+            # ========= Gmail attachments =========
+            files = search_gmail_attachments(payload)
+
+            if not files:
+                send_text(phone, "❌ Вкладень не знайдено")
+            else:
+                for f in files:
+                    send_document(phone, f["data"], f["name"])
 
     except Exception as e:
-        print("ERROR:",e)
+        print("ERROR:", e)
 
-    return "ok",200
+    return "ok", 200
 
-if __name__=="__main__":
-    threading.Thread(target=reset_daily_usage,daemon=True).start()
-    threading.Thread(target=cleanup_processed,daemon=True).start()
+
+if __name__ == "__main__":
     app.run(port=5000)
