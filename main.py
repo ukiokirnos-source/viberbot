@@ -194,7 +194,15 @@ def webhook():
             ).json()
 
             media_url = media_resp.get("url")
-            img = requests.get(media_url, headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}).content
+
+if not media_url:
+    print("MEDIA ERROR:", media_resp)
+    return "ok", 200
+
+img = requests.get(
+    media_url,
+    headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+).content
 
             # barcode service
             try:
