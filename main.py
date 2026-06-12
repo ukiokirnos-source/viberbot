@@ -34,6 +34,7 @@ drive = build("drive", "v3", credentials=creds)
 sheets = build("sheets", "v4", credentials=creds)
 
 pending_reports = {}
+
 processed_messages = {}
 processed_media = {}
 
@@ -81,8 +82,7 @@ def reset_daily_usage():
                 tzinfo=kyiv_tz
             )
 
-            sleep_seconds = (midnight - now).total_seconds()
-            time.sleep(sleep_seconds)
+            time.sleep((midnight - now).total_seconds())
 
             rows = sheets.spreadsheets().values().get(
                 spreadsheetId=SPREADSHEET_ID,
@@ -128,50 +128,6 @@ def normalize_barcode(code):
     return code if code else None
 
 
-def send_text(phone, text, reply_to=None):
-    url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
-    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
-
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": phone,
-        "type": "text",
-        "text": {"body": text}
-    }
-
-    if reply_to:
-        payload["context"] = {"message_id": reply_to}
-
-    requests.post(url, headers=headers, json=payload)
-
-
-def send_document(phone, file_bytes, filename):
-    """ОЦЕ ГОЛОВНА ЗМІНА — відправка як ФАЙЛ"""
-    url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
-    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
-
-    # WhatsApp Cloud API підтримує document через link або base64 upload
-    # тут робимо через base64 upload
-    media_upload = requests.post(
-        f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/media",
-        headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"},
-        files={"file": (filename, io.BytesIO(file_bytes), "application/octet-stream")},
-        data={"messaging_product": "whatsapp"}
-    ).json()
-
-    media_id = media_upload.get("id")
-
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": phone,
-        "type": "document",
-        "document": {
-            "id": media_id,
-            "filename": filename
-        }
-    }
-
-    requests.post(url, headers=headers, json=payload)
 def search_gmail_attachments(doc):
     query = f"filename:{doc} newer_than:14d"
 
@@ -206,21 +162,83 @@ def search_gmail_attachments(doc):
 
                     data = base64.urlsafe_b64decode(att["data"])
 
-                    files.append({
-                        "name": filename,
-                        "data": data
-                    })
+                    files.append({"name": filename, "data": data})
 
     return files
 
+
+def send_text(phone, text, reply_to=None):
+    url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
+
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": phone,
+        "type": "text",
+        "text": {"body": text}
+    }
+
+    if reply_to:
+        payload["context"] = {"message_id": reply_to}
+
+    requests.post(url, headers=headers, json=payload)
+
+
+def upload_to_whatsapp_media(file_bytes, filename):
+    url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/media"
+
+    files = {
+        "file": (filename, io.BytesIO(file_bytes), "application/octet-stream")
+    }
+
+    data = {"messaging_product": "whatsapp"}
+
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+
+    r = requests.post(url, headers=headers, files=files, data=data)
+    return r.json().get("id")
+
+
+def send_document(phone, file_bytes, filename):
+    media_id = upload_to_whatsapp_media(file_bytes, filename)
+
+    if not media_id:
+        send_text(phone, "❌ файл не відправився")
+        return
+
+    url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
+
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": phone,
+        "type": "document",
+        "document": {
+            "id": media_id,
+            "filename": filename
+        }
+    }
+
+    requests.post(url, headers=headers, json=payload)
+
+
 # ================== WEBHOOK ==================
-@app.route("/webhook", methods=["POST"])
+@app.route("/webhook", methods=["GET", "POST"])
 def webhook():
     data = request.get_json()
 
     try:
         entry = data["entry"][0]["changes"][0]["value"]
         messages = entry.get("messages")
+
         if not messages:
             return "ok", 200
 
@@ -234,15 +252,10 @@ def webhook():
 
         phone = msg["from"]
 
-        # ========= TEXT =========
         if msg["type"] in ["text", "interactive"]:
 
-            if msg["type"] == "text":
-                payload = msg["text"]["body"]
-            else:
-                payload = msg["interactive"]["button_reply"]["id"]
+            payload = msg["text"]["body"] if msg["type"] == "text" else msg["interactive"]["button_reply"]["id"]
 
-            # ========= Gmail attachments =========
             files = search_gmail_attachments(payload)
 
             if not files:
@@ -258,4 +271,6 @@ def webhook():
 
 
 if __name__ == "__main__":
+    threading.Thread(target=reset_daily_usage, daemon=True).start()
+    threading.Thread(target=cleanup_processed, daemon=True).start()
     app.run(port=5000)
