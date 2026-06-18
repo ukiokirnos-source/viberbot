@@ -387,11 +387,18 @@ if "messages" not in entry:
     return "ok", 200
 
     try:
-        entry = data["entry"][0]["changes"][0]["value"]
-        messages = entry.get("messages")
+    entry = data["entry"][0]["changes"][0]["value"]
+    messages = entry.get("messages")
 
-        if not messages:
-            return "ok", 200
+    if not messages:
+        return "ok", 200
+
+    msg = messages[0]
+
+except Exception as e:
+    print("ERROR:", e)
+    return "ok", 200
+
 
         msg = messages[0]
     # ========= IMAGE =========
