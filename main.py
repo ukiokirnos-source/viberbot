@@ -35,41 +35,29 @@ sheets = build("sheets", "v4", credentials=creds)
 
 pending_reports = {}
 
+# антидубль
 processed_messages = {}
 processed_media = {}
+
+# FIX: дедуп Gmail
 seen_gmail_messages = set()
 
 
-# ================== SEND DOCUMENT ==================
-def send_document(phone, file_url, filename):
-    url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
-
-    headers = {
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type": "application/json"
-    }
-
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": phone,
-        "type": "document",
-        "document": {
-            "link": file_url,
-            "filename": filename
-        }
-    }
-
-    requests.post(url, headers=headers, json=payload)
-
-
-# ================== INIT HEADERS ==================
+# ================== HEADERS ==================
 def init_headers():
     try:
         sheets.spreadsheets().values().update(
             spreadsheetId=SPREADSHEET_ID,
             range="Лист1!A1:D1",
             valueInputOption="RAW",
-            body={"values": [["PHONE", "NAME", "DAILY_LIMIT", "USED_TODAY"]]}
+            body={
+                "values": [[
+                    "PHONE",
+                    "NAME",
+                    "DAILY_LIMIT",
+                    "USED_TODAY"
+                ]]
+            }
         ).execute()
 
         res = sheets.spreadsheets().values().get(
@@ -87,6 +75,7 @@ def init_headers():
 
     except Exception as e:
         print("HEADER ERROR:", e)
+
 
 init_headers()
 
@@ -106,7 +95,10 @@ def reset_daily_usage():
                 tzinfo=kyiv_tz
             )
 
-            time.sleep((midnight - now).total_seconds())
+            sleep_seconds = (midnight - now).total_seconds()
+
+            print(f"До reset лишилось: {sleep_seconds:.0f} сек")
+            time.sleep(sleep_seconds)
 
             rows = sheets.spreadsheets().values().get(
                 spreadsheetId=SPREADSHEET_ID,
@@ -114,33 +106,44 @@ def reset_daily_usage():
             ).execute().get("values", [])
 
             if rows:
+                zeros = [[0] for _ in rows]
+
                 sheets.spreadsheets().values().update(
                     spreadsheetId=SPREADSHEET_ID,
                     range=f"Лист1!D2:D{len(rows)+1}",
                     valueInputOption="RAW",
-                    body={"values": [[0] for _ in rows]}
+                    body={"values": zeros}
                 ).execute()
 
-                print("RESET DONE")
+                print("✅ DAILY LIMIT RESET (Kyiv time)")
 
         except Exception as e:
             print("RESET ERROR:", e)
             time.sleep(60)
 
 
-# ================== CLEANUP ==================
+# ================== CLEANUP CACHE ==================
 def cleanup_processed():
     while True:
         now = time.time()
 
-        for k in list(processed_messages):
-            if now - processed_messages[k] > 3600:
-                del processed_messages[k]
+        msg_delete = [
+            k for k, v in processed_messages.items()
+            if now - v > 3600
+        ]
 
-        for k in list(processed_media):
-            if now - processed_media[k] > 3600:
-                del processed_media[k]
+        media_delete = [
+            k for k, v in processed_media.items()
+            if now - v > 3600
+        ]
 
+        for k in msg_delete:
+            del processed_messages[k]
+
+        for k in media_delete:
+            del processed_media[k]
+
+        print("🧹 cache cleaned")
         time.sleep(300)
 
 
@@ -148,10 +151,12 @@ def cleanup_processed():
 def normalize_barcode(code):
     if not code:
         return None
+
     code = re.sub(r'[^0-9]', '', str(code))
     return code if code else None
 
 
+# ================== FIXED GMAIL SEARCH ==================
 def search_gmail_attachments(doc):
     query = f"filename:{doc} newer_than:14d"
 
@@ -160,11 +165,13 @@ def search_gmail_attachments(doc):
         q=query
     ).execute()
 
+    messages = res.get("messages", [])
     files = []
 
-    for m in res.get("messages", []):
+    for m in messages:
         msg_id = m["id"]
 
+        # FIX: дедуп листів
         if msg_id in seen_gmail_messages:
             continue
         seen_gmail_messages.add(msg_id)
@@ -174,7 +181,9 @@ def search_gmail_attachments(doc):
             id=msg_id
         ).execute()
 
-        for p in msg["payload"].get("parts", []):
+        parts = msg["payload"].get("parts", [])
+
+        for p in parts:
             filename = p.get("filename")
 
             if filename and doc in filename:
@@ -194,32 +203,17 @@ def search_gmail_attachments(doc):
                         "data": data
                     })
 
+    # FIX: обмеження, щоб не було 30 повідомлень
     return files[:3]
 
 
-# ================== DRIVE ==================
-def upload_photo(bytes_, name):
-    media = MediaIoBaseUpload(io.BytesIO(bytes_), mimetype="image/jpeg")
-
-    file = drive.files().create(
-        body={"name": name, "parents": [GDRIVE_FOLDER_ID]},
-        media_body=media,
-        fields="id"
-    ).execute()
-
-    drive.permissions().create(
-        fileId=file["id"],
-        body={"type": "anyone", "role": "reader"}
-    ).execute()
-
-    return f"https://drive.google.com/uc?id={file['id']}"
-
-
-# ================== WHATSAPP ==================
 def send_text(phone, text, reply_to=None):
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
 
-    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
 
     payload = {
         "messaging_product": "whatsapp",
@@ -237,7 +231,10 @@ def send_text(phone, text, reply_to=None):
 def send_image(phone, image_url):
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
 
-    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
 
     payload = {
         "messaging_product": "whatsapp",
@@ -252,7 +249,10 @@ def send_image(phone, image_url):
 def send_report_button(phone, fname):
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
 
-    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
 
     payload = {
         "messaging_product": "whatsapp",
@@ -276,8 +276,92 @@ def send_report_button(phone, fname):
     requests.post(url, headers=headers, json=payload)
 
 
+def upload_photo(bytes_, name):
+    media = MediaIoBaseUpload(
+        io.BytesIO(bytes_),
+        mimetype="image/jpeg"
+    )
+
+    file = drive.files().create(
+        body={
+            "name": name,
+            "parents": [GDRIVE_FOLDER_ID]
+        },
+        media_body=media,
+        fields="id"
+    ).execute()
+
+    drive.permissions().create(
+        fileId=file["id"],
+        body={"type": "anyone", "role": "reader"}
+    ).execute()
+
+    return f"https://drive.google.com/uc?id={file['id']}"
+
+
+def increment_global_counter():
+    try:
+        sheet = sheets.spreadsheets().values()
+
+        res = sheet.get(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Лист1!E1"
+        ).execute()
+
+        current = 0
+
+        if "values" in res and res["values"]:
+            try:
+                current = int(res["values"][0][0])
+            except:
+                current = 0
+
+        current += 1
+
+        sheet.update(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Лист1!E1",
+            valueInputOption="RAW",
+            body={"values": [[current]]}
+        ).execute()
+
+    except Exception as e:
+        print("TOTAL ERROR:", e)
+
+
+def get_user(phone):
+    rows = sheets.spreadsheets().values().get(
+        spreadsheetId=SPREADSHEET_ID,
+        range="Лист1!A:E"
+    ).execute().get("values", [])
+
+    for i, r in enumerate(rows):
+        if r and r[0] == phone:
+            return i + 1, r
+
+    return None, None
+
+
+def create_user(phone, name):
+    sheets.spreadsheets().values().append(
+        spreadsheetId=SPREADSHEET_ID,
+        range="Лист1!A:E",
+        valueInputOption="RAW",
+        body={"values": [[phone, name, 12, 0, 0]]}
+    ).execute()
+
+
+def update_used(row, value):
+    sheets.spreadsheets().values().update(
+        spreadsheetId=SPREADSHEET_ID,
+        range=f"Лист1!D{row}",
+        valueInputOption="RAW",
+        body={"values": [[value]]}
+    ).execute()
+
+
 # ================== WEBHOOK ==================
-@app.route("/webhook", methods=["POST"])
+@app.route("/webhook", methods=["GET", "POST"])
 def webhook():
     data = request.get_json()
 
@@ -289,24 +373,45 @@ def webhook():
             return "ok", 200
 
         msg = messages[0]
+
         message_id = msg["id"]
 
         if message_id in processed_messages:
+            print("DUPLICATE MESSAGE:", message_id)
             return "ok", 200
 
         processed_messages[message_id] = time.time()
 
         phone = msg["from"]
 
-        # ================= IMAGE (штрихкоди + ліміт + скарга) =================
+        try:
+            name = entry["contacts"][0]["profile"]["name"]
+        except:
+            name = phone
+
+        # ========= IMAGE =========
         if msg["type"] == "image":
 
             media_id = msg["image"]["id"]
 
             if media_id in processed_media:
+                print("DUPLICATE MEDIA:", media_id)
                 return "ok", 200
 
             processed_media[media_id] = time.time()
+
+            row, user = get_user(phone)
+
+            if not row:
+                create_user(phone, name)
+                row, user = get_user(phone)
+
+            limit = int(user[2]) if len(user) > 2 and str(user[2]).isdigit() else 999
+            used = int(user[3]) if len(user) > 3 and str(user[3]).isdigit() else 0
+
+            if used >= limit:
+                send_text(phone, "🚫 Ліміт вичерпано")
+                return "ok", 200
 
             media_resp = requests.get(
                 f"https://graph.facebook.com/v18.0/{media_id}",
@@ -316,8 +421,10 @@ def webhook():
             if "url" not in media_resp:
                 return "ok", 200
 
+            media_url = media_resp["url"]
+
             img = requests.get(
-                media_resp["url"],
+                media_url,
                 headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
             ).content
 
@@ -331,7 +438,10 @@ def webhook():
                 data_bc = r.json() if r.ok else {}
                 raw = data_bc.get("barcodes", []) or data_bc.get("result", [])
 
-                barcodes = [normalize_barcode(b) for b in raw if b]
+                barcodes = [
+                    normalize_barcode(b)
+                    for b in raw if b
+                ]
 
             except:
                 barcodes = []
@@ -347,16 +457,22 @@ def webhook():
 
             send_report_button(phone, fname)
 
-        # ================= TEXT (gmail attachments) =================
+            update_used(row, used + 1)
+            increment_global_counter()
+
+        # ========= TEXT =========
         elif msg["type"] in ["text", "interactive"]:
 
-            payload = msg["text"]["body"] if msg["type"] == "text" else msg["interactive"]["button_reply"]["id"]
+            if msg["type"] == "text":
+                payload = msg["text"]["body"]
+            else:
+                payload = msg["interactive"]["button_reply"]["id"]
 
             if payload.startswith("report_"):
                 fname = payload.replace("report_", "")
 
                 if fname in pending_reports:
-                    send_text(ADMIN_PHONE, f"⚠️ Скарга")
+                    send_text(ADMIN_PHONE, f"⚠️ Скарга від {phone}")
                     send_image(ADMIN_PHONE, pending_reports[fname])
 
                 send_text(phone, "Скарга відправлена ✅")
@@ -368,14 +484,16 @@ def webhook():
                     send_text(phone, "❌ Вкладень не знайдено")
                 else:
                     for f in files:
-
                         media = MediaIoBaseUpload(
                             io.BytesIO(f["data"]),
                             mimetype="application/octet-stream"
                         )
 
                         file_drive = drive.files().create(
-                            body={"name": f["name"], "parents": [GDRIVE_FOLDER_ID]},
+                            body={
+                                "name": f["name"],
+                                "parents": [GDRIVE_FOLDER_ID]
+                            },
                             media_body=media,
                             fields="id"
                         ).execute()
@@ -387,7 +505,7 @@ def webhook():
 
                         url = f"https://drive.google.com/uc?id={file_drive['id']}"
 
-                        send_document(phone, url, f["name"])
+                        send_text(phone, f"📎 {f['name']}: {url}")
 
     except Exception as e:
         print("ERROR:", e)
