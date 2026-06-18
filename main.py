@@ -378,39 +378,22 @@ def update_used(row, value):
 def webhook():
     data = request.get_json()
 
+    # 🔥 ФІЛЬТР 1 — немає даних
     if not data:
-    return "ok", 200
+        return "ok", 200
 
-entry = data["entry"][0]["changes"][0]["value"]
+    entry = data["entry"][0]["changes"][0]["value"]
 
-if "messages" not in entry:
-    return "ok", 200
+    # 🔥 ФІЛЬТР 2 — це не повідомлення
+    if "messages" not in entry:
+        return "ok", 200
 
-    try:
-        entry = data["entry"][0]["changes"][0]["value"]
-        messages = entry.get("messages")
+    messages = entry.get("messages")
 
-        if not messages:
-            return "ok", 200
+    if not messages:
+        return "ok", 200
 
-        msg = messages[0]
-
-        # ========= АНТИДУБЛЬ ПО MESSAGE ID =========
-        message_id = msg["id"]
-
-        if message_id in processed_messages:
-            print("DUPLICATE MESSAGE:", message_id)
-            return "ok", 200
-
-        processed_messages[message_id] = time.time()
-
-        phone = msg["from"]
-
-        try:
-            name = entry["contacts"][0]["profile"]["name"]
-        except:
-            name = phone
-
+    msg = messages[0]
         # ========= IMAGE =========
         if msg["type"] == "image":
 
