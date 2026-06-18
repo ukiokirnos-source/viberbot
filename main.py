@@ -373,41 +373,39 @@ def update_used(row, value):
     ).execute()
 
 
-# ================== WEBHOOK ==================
-# ================== WEBHOOK ==================
 @app.route("/webhook", methods=["GET", "POST"])
 def webhook():
     data = request.get_json()
 
     try:
         entry = data["entry"][0]["changes"][0]["value"]
-
         messages = entry.get("messages")
+
         if not messages:
             return "ok", 200
 
         msg = messages[0]
-    # ========= IMAGE =========
-    if msg["type"] == "image":
-        if message_id in processed_messages:
-            print("DUPLICATE MESSAGE:", message_id)
-            return "ok", 200
-
-        processed_messages[message_id] = time.time()
-
+        msg_type = msg["type"]
         phone = msg["from"]
 
-        try:
-            name = entry["contacts"][0]["profile"]["name"]
-        except:
-            name = phone
+        message_id = msg.get("id")
 
         # ========= IMAGE =========
-        if msg["type"] == "image":
+        if msg_type == "image":
+
+            if message_id and message_id in processed_messages:
+                print("DUPLICATE MESSAGE:", message_id)
+                return "ok", 200
+
+            processed_messages[message_id] = time.time()
+
+            try:
+                name = entry["contacts"][0]["profile"]["name"]
+            except:
+                name = phone
 
             media_id = msg["image"]["id"]
 
-            # антидубль по фото
             if media_id in processed_media:
                 print("DUPLICATE MEDIA:", media_id)
                 return "ok", 200
@@ -452,17 +450,14 @@ def webhook():
                 data_bc = r.json() if r.ok else {}
                 raw = data_bc.get("barcodes", []) or data_bc.get("result", [])
 
-                barcodes = [
-                    normalize_barcode(b)
-                    for b in raw if b
-                ]
+                barcodes = [normalize_barcode(b) for b in raw if b]
 
             except:
                 barcodes = []
 
             response_text = "\n".join(barcodes) if barcodes else "❌ Штрихкодів не знайдено"
 
-            send_text(phone, response_text, reply_to=message_id)
+            send_text(phone, response_text)
 
             fname = f"photo_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
             url = upload_photo(img, fname)
@@ -474,28 +469,23 @@ def webhook():
             update_used(row, used + 1)
             increment_global_counter()
 
-        # ========= TEXT =========
-        elif msg["type"] in ["text", "interactive"]:
+        # ========= TEXT / INTERACTIVE =========
+        elif msg_type in ["text", "interactive"]:
 
-            if msg["type"] == "text":
+            if msg_type == "text":
                 payload = msg["text"]["body"]
             else:
                 payload = msg["interactive"]["button_reply"]["id"]
-            if not payload or len(payload) < 2:
+
+            if not payload:
                 return "ok", 200
 
             if payload.startswith("report_"):
                 fname = payload.replace("report_", "")
 
                 if fname in pending_reports:
-                    send_text(
-                        ADMIN_PHONE,
-                        f"⚠️ Скарга від {phone}"
-                    )
-                    send_image(
-                        ADMIN_PHONE,
-                        pending_reports[fname]
-                    )
+                    send_text(ADMIN_PHONE, f"⚠️ Скарга від {phone}")
+                    send_image(ADMIN_PHONE, pending_reports[fname])
 
                 send_text(phone, "Скарга відправлена ✅")
 
@@ -512,20 +502,14 @@ def webhook():
                         )
 
                         file_drive = drive.files().create(
-                            body={
-                                "name": f["name"],
-                                "parents": [GDRIVE_FOLDER_ID]
-                            },
+                            body={"name": f["name"], "parents": [GDRIVE_FOLDER_ID]},
                             media_body=media,
                             fields="id"
                         ).execute()
 
                         drive.permissions().create(
                             fileId=file_drive["id"],
-                            body={
-                                "type": "anyone",
-                                "role": "reader"
-                            }
+                            body={"type": "anyone", "role": "reader"}
                         ).execute()
 
                         url = f"https://drive.google.com/uc?id={file_drive['id']}"
