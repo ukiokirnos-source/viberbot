@@ -378,6 +378,14 @@ def update_used(row, value):
 def webhook():
     data = request.get_json()
 
+    if not data:
+    return "ok", 200
+
+entry = data["entry"][0]["changes"][0]["value"]
+
+if "messages" not in entry:
+    return "ok", 200
+
     try:
         entry = data["entry"][0]["changes"][0]["value"]
         messages = entry.get("messages")
@@ -482,6 +490,8 @@ def webhook():
                 payload = msg["text"]["body"]
             else:
                 payload = msg["interactive"]["button_reply"]["id"]
+            if not payload or len(payload) < 2:
+                return "ok", 200
 
             if payload.startswith("report_"):
                 fname = payload.replace("report_", "")
@@ -504,7 +514,7 @@ def webhook():
                 if not files:
                     send_text(phone, "❌ Вкладень не знайдено")
                 else:
-                    for f in files:
+                    for f in files[:3]:
                         media = MediaIoBaseUpload(
                             io.BytesIO(f["data"]),
                             mimetype="application/octet-stream"
