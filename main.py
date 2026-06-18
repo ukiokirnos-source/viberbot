@@ -13,7 +13,7 @@ from googleapiclient.http import MediaIoBaseUpload
 from zoneinfo import ZoneInfo
 
 # ================== НАЛАШТУВАННЯ ==================
-WHATSAPP_TOKEN = "EAAwJZC7glYnQBRB8Wy8uUb22UsZAUMYYoFEaZCyUR9HduC963ZBEeheqsQhIDGaTbyBVKG2Ks5xMqryQRBEBC1A67FhawW0pkUrFkSRfKl7qhL8p9RrdA6AZAatMXcBM2mlf0n9rpkFTEDWJK5PZBgW9LVLieea8ZAZBrZCT4epEV9qvhCMdGVAgSIF8ZAbXJqktAZBAZDZD"
+WHATSAPP_TOKEN = "EAAwJZC7glYnQBRB8Wy8uUb22UsZAUMYYoFEaZCyUR9HduC963ZBEeheqsQhIDGaTbyBVKG2Ks5xMqryQRBEBC1A67FhawW0pkUrFkSRfKl7qhL8p9RrdA6AZAatMXcBM2mlf0n9rpkFTEDWJKI5PZBgW9LVLieea8ZAZBrZCT4epEV9qvhCMdGVAgSIF8ZAbXJqktAZBAZDZD"
 PHONE_NUMBER_ID = "989427330931362"
 VERIFY_TOKEN = "my_token_123"
 ADMIN_PHONE = "380675335947"
@@ -38,9 +38,6 @@ pending_reports = {}
 # антидубль
 processed_messages = {}
 processed_media = {}
-
-# FIX: дедуп Gmail
-seen_gmail_messages = set()
 
 
 # ================== HEADERS ==================
@@ -88,6 +85,7 @@ def reset_daily_usage():
         try:
             now = datetime.datetime.now(kyiv_tz)
 
+            # наступна північ по Києву
             tomorrow = now + datetime.timedelta(days=1)
             midnight = datetime.datetime.combine(
                 tomorrow.date(),
@@ -156,7 +154,6 @@ def normalize_barcode(code):
     return code if code else None
 
 
-# ================== FIXED GMAIL SEARCH ==================
 def search_gmail_attachments(doc):
     query = f"filename:{doc} newer_than:14d"
 
@@ -169,16 +166,9 @@ def search_gmail_attachments(doc):
     files = []
 
     for m in messages:
-        msg_id = m["id"]
-
-        # FIX: дедуп листів
-        if msg_id in seen_gmail_messages:
-            continue
-        seen_gmail_messages.add(msg_id)
-
         msg = gmail.users().messages().get(
             userId="me",
-            id=msg_id
+            id=m["id"]
         ).execute()
 
         parts = msg["payload"].get("parts", [])
@@ -192,7 +182,7 @@ def search_gmail_attachments(doc):
                 if att_id:
                     att = gmail.users().messages().attachments().get(
                         userId="me",
-                        messageId=msg_id,
+                        messageId=m["id"],
                         id=att_id
                     ).execute()
 
@@ -203,8 +193,7 @@ def search_gmail_attachments(doc):
                         "data": data
                     })
 
-    # FIX: обмеження, щоб не було 30 повідомлень
-    return files[:3]
+    return files
 
 
 def send_text(phone, text, reply_to=None):
@@ -227,7 +216,26 @@ def send_text(phone, text, reply_to=None):
 
     requests.post(url, headers=headers, json=payload)
 
+def send_document(phone, file_url, filename):
+    url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
 
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": phone,
+        "type": "document",
+        "document": {
+            "link": file_url,
+            "filename": filename
+        }
+    }
+
+    requests.post(url, headers=headers, json=payload)
+    
 def send_image(phone, image_url):
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
 
@@ -260,7 +268,9 @@ def send_report_button(phone, fname):
         "type": "interactive",
         "interactive": {
             "type": "button",
-            "body": {"text": "Є проблема з фото?"},
+            "body": {
+                "text": "Є проблема з фото?"
+            },
             "action": {
                 "buttons": [{
                     "type": "reply",
@@ -293,7 +303,10 @@ def upload_photo(bytes_, name):
 
     drive.permissions().create(
         fileId=file["id"],
-        body={"type": "anyone", "role": "reader"}
+        body={
+            "type": "anyone",
+            "role": "reader"
+        }
     ).execute()
 
     return f"https://drive.google.com/uc?id={file['id']}"
@@ -374,6 +387,7 @@ def webhook():
 
         msg = messages[0]
 
+        # ========= АНТИДУБЛЬ ПО MESSAGE ID =========
         message_id = msg["id"]
 
         if message_id in processed_messages:
@@ -394,6 +408,7 @@ def webhook():
 
             media_id = msg["image"]["id"]
 
+            # антидубль по фото
             if media_id in processed_media:
                 print("DUPLICATE MEDIA:", media_id)
                 return "ok", 200
@@ -472,8 +487,14 @@ def webhook():
                 fname = payload.replace("report_", "")
 
                 if fname in pending_reports:
-                    send_text(ADMIN_PHONE, f"⚠️ Скарга від {phone}")
-                    send_image(ADMIN_PHONE, pending_reports[fname])
+                    send_text(
+                        ADMIN_PHONE,
+                        f"⚠️ Скарга від {phone}"
+                    )
+                    send_image(
+                        ADMIN_PHONE,
+                        pending_reports[fname]
+                    )
 
                 send_text(phone, "Скарга відправлена ✅")
 
@@ -500,12 +521,15 @@ def webhook():
 
                         drive.permissions().create(
                             fileId=file_drive["id"],
-                            body={"type": "anyone", "role": "reader"}
+                            body={
+                                "type": "anyone",
+                                "role": "reader"
+                            }
                         ).execute()
 
                         url = f"https://drive.google.com/uc?id={file_drive['id']}"
 
-                        send_text(phone, f"📎 {f['name']}: {url}")
+                        send_document(phone, url, f["name"])
 
     except Exception as e:
         print("ERROR:", e)
@@ -514,6 +538,14 @@ def webhook():
 
 
 if __name__ == "__main__":
-    threading.Thread(target=reset_daily_usage, daemon=True).start()
-    threading.Thread(target=cleanup_processed, daemon=True).start()
-    app.run(port=5000)
+    threading.Thread(
+        target=reset_daily_usage,
+        daemon=True
+    ).start()
+
+    threading.Thread(
+        target=cleanup_processed,
+        daemon=True
+    ).start()
+
+    app.run(port=5000) 
