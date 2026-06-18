@@ -457,7 +457,7 @@ def webhook():
 
             response_text = "\n".join(barcodes) if barcodes else "❌ Штрихкодів не знайдено"
 
-            send_text(phone, response_text)
+            send_text(phone, response_text, reply_to=message_id)
 
             fname = f"photo_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
             url = upload_photo(img, fname)
