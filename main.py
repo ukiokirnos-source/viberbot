@@ -18,7 +18,7 @@ PHONE_NUMBER_ID = "989427330931362"
 VERIFY_TOKEN = "my_token_123"
 ADMIN_PHONE = "380675335947"
 
-WEB_APP_URL = "https://script.google.com/macros/s/AKfycbzlwEeT4zRBwYj_d8ytw2NnEG9POSqjFtAPcCIBmNeB_qRZbT9lT_Wj1lMzf_fvgoJfBw/exec"
+WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxpEKHLvSH64QjRVNaz1KRQng46PqHAUhuvHUn-TyZoh5MLySH-4-PIOHmqBQICI5Ta3w/exec"
 GMAIL_TOKEN_FILE = "gmail_token.json"
 GDRIVE_FOLDER_ID = "1FteobWxkEUxPq1kBhUiP70a4-X0slbWe"
 
