@@ -17,6 +17,10 @@ VERIFY_TOKEN = "my_token_123"
 GMAIL_TOKEN_FILE = "gmail_token.json"
 GDRIVE_FOLDER_ID = "1FteobWxkEUxPq1kBhUiP70a4-X0slbWe"
 
+# номери, яким дозволено користуватись ботом (формат 380XXXXXXXXX).
+# Якщо множина порожня - відповідає всім.
+ALLOWED_PHONES = set()
+
 # ================== INIT ==================
 app = Flask(__name__)
 
@@ -109,27 +113,6 @@ def send_text(phone, text, reply_to=None):
     requests.post(url, headers=headers, json=payload)
 
 
-def send_document(phone, file_url, filename):
-    url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
-
-    headers = {
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type": "application/json"
-    }
-
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": phone,
-        "type": "document",
-        "document": {
-            "link": file_url,
-            "filename": filename
-        }
-    }
-
-    requests.post(url, headers=headers, json=payload)
-
-
 def upload_to_drive(data, name):
     media = MediaIoBaseUpload(
         io.BytesIO(data),
@@ -172,6 +155,9 @@ def webhook():
         phone = msg["from"]
         message_id = msg.get("id")
 
+        if ALLOWED_PHONES and phone not in ALLOWED_PHONES:
+            return "ok", 200
+
         if msg.get("type") != "text":
             return "ok", 200
 
@@ -190,9 +176,12 @@ def webhook():
         if not files:
             send_text(phone, "❌ Вкладень не знайдено")
         else:
+            lines = []
             for f in files[:3]:
                 url = upload_to_drive(f["data"], f["name"])
-                send_document(phone, url, f["name"])
+                lines.append(f"📄 {f['name']}\n{url}")
+
+            send_text(phone, "\n\n".join(lines), reply_to=message_id)
 
     except Exception as e:
         print("ERROR:", e)
